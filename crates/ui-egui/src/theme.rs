@@ -55,6 +55,7 @@ impl TabAccent {
         let accent = Self::for_tab(&Tokens::get(), &app.ui.tab);
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("sc_tab_accent"), accent);
+            d.insert_temp(egui::Id::new("sc_sketch_open"), app.session.active_sketch.is_some());
             d.insert_temp(egui::Id::new("sc_tool_accent"), app.tool.is_some() || app.dialog.is_some());
         });
     }
@@ -62,10 +63,11 @@ impl TabAccent {
     /// Paint only the focused numeric editor, without changing sibling buttons or checkboxes.
     pub fn number_focus(ui: &egui::Ui, response: &egui::Response) {
         let active = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("sc_tool_accent"))).unwrap_or(false);
-        let accent = Self::current(ui.ctx());
         let t = Tokens::get();
-        if active && response.has_focus() && accent.color != t.accent {
-            ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.0, accent.color), egui::StrokeKind::Inside);
+        let sketch = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new("sc_sketch_open"))).unwrap_or(false);
+        let color = if sketch { t.sketch_accent } else { Self::current(ui.ctx()).color };
+        if active && response.has_focus() && color != t.accent {
+            ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.0, color), egui::StrokeKind::Inside);
         }
     }
 }

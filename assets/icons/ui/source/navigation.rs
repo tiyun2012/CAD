@@ -159,8 +159,24 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     };
     let positive = !name.starts_with('-');
     let ink = if depth < -0.01 { col.gamma_multiply(0.55) } else { col };
-    painter.line_segment([c, at], Stroke::new(if positive { 2.0 } else { 1.0 }, ink));
-    painter.circle_filled(at, AXIS_RADIUS, if hovered { t.accent_soft } else { t.overlay });
-    painter.circle_stroke(at, AXIS_RADIUS, Stroke::new(if hovered { 2.0 } else { 1.0 }, if hovered { t.accent } else { ink }));
-    painter.text(at, Align2::CENTER_CENTER, name.to_uppercase(), FontId::proportional(11.0), ink);
+    // Keep picking at the original tips; only the artwork moves inward, leaving
+    // more breathing room inside the unchanged 55 px compass background.
+    let at = c + (at - c) * 0.84;
+    let radius = if positive { 12.0 } else { 6.5 };
+    let direction = (at - c).normalized();
+    painter.line_segment([c, at - direction * radius], Stroke::new(if positive { 3.5 } else { 2.5 }, ink));
+    if positive {
+        painter.circle_filled(at, radius, col);
+    }
+    // Negative tips are hollow: neither the axis shaft nor a fill covers their
+    // centres, so the translucent compass background shows through.
+    if hovered {
+        painter.circle_filled(at, radius, t.accent_soft);
+    }
+    if positive {
+        painter.text(at, Align2::CENTER_CENTER, name.to_uppercase(), FontId::proportional(12.0), if hovered { ink } else { t.on_accent });
+    }
+    if !positive || hovered {
+        painter.circle_stroke(at, radius, Stroke::new(2.0, if hovered { t.accent } else { ink }));
+    }
 }

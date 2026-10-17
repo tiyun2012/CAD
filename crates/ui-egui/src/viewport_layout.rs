@@ -13,7 +13,10 @@ pub(crate) struct Layout {
 }
 
 /// Enumerate rectangles whose edges meet the viewport or a bounded number of overlays.
-fn free_rect(view: Rect, obstacles: &[Rect]) -> Rect {
+pub(crate) fn free_rect(view: Rect, obstacles: &[Rect]) -> Rect {
+    if !view.is_finite() || !view.is_positive() {
+        return Rect::NOTHING;
+    }
     let mut xs = vec![view.left(), view.right()];
     let mut ys = vec![view.top(), view.bottom()];
     let obstacles: Vec<_> = obstacles.iter().take(16).map(|r| r.intersect(view)).filter(|r| r.is_positive() && r.is_finite()).collect();
