@@ -49,6 +49,8 @@ pub mod fuzz;
 mod heal;
 mod helix;
 pub mod history;
+#[cfg(test)]
+mod hole_loop_tests;
 mod iges_in;
 mod iges_out;
 #[cfg(test)]
