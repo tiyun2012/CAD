@@ -2164,5 +2164,9 @@ pub(crate) fn body_rows(app: &SolveApp) -> Vec<String> {
 }
 
 #[cfg(test)]
+#[path = "browser_menu_tests.rs"]
+mod browser_menu_tests;
+
+#[cfg(test)]
 #[path = "section_browser_tests.rs"]
 mod section_browser_tests;
