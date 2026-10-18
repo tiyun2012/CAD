@@ -21,6 +21,18 @@ fn ok(h: &mut Harness) {
     assert!(h.app.dialog.is_none(), "{:?} {:?} {:?}", h.app.preview.error, h.app.dialog.as_ref().map(|d| (&d.error, &d.inputs)), h.app.session.log);
 }
 
+/// What the blend feature `name` was made with: the bodies at each end, continuity, bulge, seams
+/// and stitch.
+#[allow(clippy::type_complexity)]
+fn blend(h: &Harness, name: &str) -> (String, String, [Continuity; 2], [f64; 2], Option<[Vec3; 2]>, bool) {
+    match &h.app.session.doc.find_feature(name).unwrap().kind {
+        FeatureKind::SurfaceBlend { from, to, continuity, bulge, seam, stitch, .. } => {
+            (from.body.to_string(), to.body.to_string(), *continuity, *bulge, seam.map(|[p, q]| [p.0, q.0]), *stitch)
+        }
+        k => panic!("{k:?}"),
+    }
+}
+
 #[test]
 fn edges_at_each_end_make_a_blend_and_come_back_in_an_edit() {
     let mut h = Harness::new();
@@ -39,13 +51,7 @@ fn edges_at_each_end_make_a_blend_and_come_back_in_an_edit() {
     *bulge = [0.5, 0.0];
     ok(&mut h);
     let name = h.app.session.doc.features.last().unwrap().name.clone();
-    let blend = |h: &Harness| match &h.app.session.doc.find_feature(&name).unwrap().kind {
-        FeatureKind::SurfaceBlend { from, to, continuity, bulge, seam, stitch, .. } => {
-            (from.body.to_string(), to.body.to_string(), *continuity, *bulge, seam.map(|[p, q]| [p.0, q.0]), *stitch)
-        }
-        k => panic!("{k:?}"),
-    };
-    let (a, b, continuity, bulge, seam, stitch) = blend(&h);
+    let (a, b, continuity, bulge, seam, stitch) = blend(&h, &name);
     assert_eq!((a.as_str(), b.as_str()), ("A", "B"));
     assert_eq!(continuity, [Continuity::G2, Continuity::G1]);
     assert_eq!((bulge, seam, stitch), ([0.5, 0.0], None, false));
@@ -60,12 +66,6 @@ fn edges_at_each_end_make_a_blend_and_come_back_in_an_edit() {
         )
         .unwrap();
     let name = h.app.session.doc.features.last().unwrap().name.clone();
-    let blend = |h: &Harness| match &h.app.session.doc.find_feature(&name).unwrap().kind {
-        FeatureKind::SurfaceBlend { from, to, continuity, bulge, seam, stitch, .. } => {
-            (from.body.to_string(), to.body.to_string(), *continuity, *bulge, seam.map(|[p, q]| [p.0, q.0]), *stitch)
-        }
-        k => panic!("{k:?}"),
-    };
     h.step(&json!({"call":"ui.editFeature","params":{"feature":name}})).unwrap();
     h.frames(8);
     let d = h.app.dialog.as_mut().unwrap();
@@ -74,7 +74,7 @@ fn edges_at_each_end_make_a_blend_and_come_back_in_an_edit() {
     let Kind::Surface(Surf::Blend { stitch, .. }) = &mut d.kind else { panic!() };
     *stitch = true;
     ok(&mut h);
-    let (_, _, continuity, _, seam, stitch) = blend(&h);
+    let (_, _, continuity, _, seam, stitch) = blend(&h, &name);
     assert_eq!(continuity, [Continuity::G2, Continuity::G1]);
     assert_eq!(seam, Some([Vec3::new(0.0, 10.0, 10.0), Vec3::new(0.0, 20.0, 15.0)]));
     assert!(stitch);

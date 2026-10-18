@@ -237,28 +237,18 @@ fn blend(s: &mut Session, p: &Value) -> Result<Value> {
             [one(list.first())?, one(list.get(1))?]
         }
     };
-    let align = match p.get("align") {
-        None | Some(Value::Null) => None,
-        Some(v) => {
-            let list = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(cmd, "`align` must be two points, one per end"))?;
-            let point = |x: Option<&Value>| -> Result<solidcraft_geom::Vec3> {
-                x.and_then(vec3).ok_or_else(|| bad(cmd, "each `align` entry must be a point [x,y,z]"))
-            };
-            Some([Position(point(list.first())?), Position(point(list.get(1))?)])
-        }
-    };
-    let seam = match p.get("seam") {
-        None | Some(Value::Null) => None,
-        Some(v) => {
-            let list = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(cmd, "`seam` must be two points, one on each chain"))?;
-            let point = |x: Option<&Value>| -> Result<solidcraft_geom::Vec3> {
-                x.and_then(vec3).ok_or_else(|| bad(cmd, "each `seam` entry must be a point [x,y,z]"))
-            };
-            Some([Position(point(list.first())?), Position(point(list.get(1))?)])
-        }
-    };
+    let align = point_pair(p, cmd, "align", "one per end")?;
+    let seam = point_pair(p, cmd, "seam", "one on each chain")?;
     let stitch = bool_(p, "stitch").unwrap_or(false);
     add_feature(s, p, FeatureKind::SurfaceBlend { from, to, continuity, bulge, align, seam, stitch })
+}
+
+/// An optional pair of points `key` (`null` as none): `which` says what each one is.
+fn point_pair(p: &Value, cmd: &str, key: &str, which: &str) -> Result<Option<[Position; 2]>> {
+    let Some(v) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
+    let list = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(cmd, format!("`{key}` must be two points, {which}")))?;
+    let point = |x: Option<&Value>| x.and_then(vec3).map(Position).ok_or_else(|| bad(cmd, format!("each `{key}` entry must be a point [x,y,z]")));
+    Ok(Some([point(list.first())?, point(list.get(1))?]))
 }
 
 fn surface_extrude(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1549,8 +1539,7 @@ mod tests {
             json!((0..8).map(|k| f64::from(k) * 0.785 + 0.1).map(|a| json!([10.0 * a.cos(), 10.0 * a.sin(), z])).collect::<Vec<_>>())
         };
         // Unstitching keeps the wall under the body's own name.
-        let (low, high) = ("Low", "High");
-        let blend = json!({"from": {"body": low, "edges": rim(30.0)}, "to": {"body": high, "edges": rim(40.0)}, "continuity": ["g1", "g1"], "body_name": "Neck"});
+        let blend = json!({"from": {"body": "Low", "edges": rim(30.0)}, "to": {"body": "High", "edges": rim(40.0)}, "continuity": ["g1", "g1"], "body_name": "Neck"});
         run(&mut s, "surface.blend", blend.clone());
         // The wall between: radius 10 and straight up, so 2π·10·10 of area.
         let want = 2.0 * std::f64::consts::PI * 100.0;
@@ -1577,7 +1566,7 @@ mod tests {
         assert!((turn(&cold, "Twist") - 90.0).abs() < 0.1, "read back: {}°", turn(&cold, "Twist"));
         // A closed rim does not blend to an open edge; a seam that is not two points is refused.
         run(&mut s, "solid.box", json!({"length": 40, "width": 10, "height": 10, "corner": [-20, 30, 30], "body_name": "Block"}));
-        let open = s.execute("surface.blend", &json!({"from": {"body": low, "edges": rim(30.0)}, "to": {"body": "Block", "edges": [[0, 30, 40]]}}));
+        let open = s.execute("surface.blend", &json!({"from": {"body": "Low", "edges": rim(30.0)}, "to": {"body": "Block", "edges": [[0, 30, 40]]}}));
         assert!(open.as_ref().is_err_and(|e| e.to_string().contains("closed chain")), "{open:?}");
         for seam in [json!([[0, 0, 0]]), json!("x"), json!([[0, 0, 0], "y"])] {
             let mut bad = blend.clone();

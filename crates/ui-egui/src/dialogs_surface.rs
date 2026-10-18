@@ -354,6 +354,17 @@ fn body_and_faces(picks: &[Sel]) -> Result<(String, Vec<Value>), String> {
     Ok((body, faces))
 }
 
+/// The body of picked edges (all of one body) and a point on each edge.
+fn body_and_edges(picks: &[Sel]) -> Result<(String, Vec<Value>), String> {
+    let body_of = |x: &Sel| if let Sel::Edge { body, .. } = x { Some(body.clone()) } else { None };
+    let body = picks.iter().find_map(body_of).ok_or("pick edges of a body")?;
+    if picks.iter().any(|x| body_of(x).as_ref() != Some(&body)) {
+        return Err("pick edges of one body".into());
+    }
+    let edges = picks.iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+    Ok((body, edges))
+}
+
 /// The sketch, profiles and curves of a surface builder's picks (all in one sketch).
 fn sheet_picks(app: &SolveApp, picks: &[Sel]) -> Result<Value, String> {
     let profiles: Vec<(u64, usize)> =
@@ -561,13 +572,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
             need(0, "the edges the blend leaves")?;
             need(1, "the edges the blend arrives at")?;
             let side = |i: usize| -> Result<Value, String> {
-                let body_of = |x: &Sel| if let Sel::Edge { body, .. } = x { Some(body.clone()) } else { None };
-                let body = items(inputs, i).iter().find_map(body_of).ok_or("pick edges of a body at each end")?;
-                if items(inputs, i).iter().any(|x| body_of(x).as_ref() != Some(&body)) {
-                    return Err("pick the edges of one body at each end".into());
-                }
-                let edges: Vec<Value> =
-                    items(inputs, i).iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+                let (body, edges) = body_and_edges(items(inputs, i))?;
                 Ok(json!({"body": body, "edges": edges}))
             };
             let word = |i: usize| BLEND_CONTINUITY.get(i).map_or("g1", |(_, w)| *w);
@@ -666,13 +671,7 @@ pub fn commands(app: &SolveApp, k: &Surf, inputs: &[SelInput], extra: &Map<Strin
         }
         Surf::Ruled { distance, mode, angle, flip, round } => {
             need(0, "the edges to rule from")?;
-            let edge_body = |x: &Sel| if let Sel::Edge { body, .. } = x { Some(body.clone()) } else { None };
-            let body = items(inputs, 0).iter().find_map(edge_body).ok_or("pick edges of a body")?;
-            if items(inputs, 0).iter().any(|x| edge_body(x).as_ref() != Some(&body)) {
-                return Err("pick edges of one body".into());
-            }
-            let edges: Vec<Value> =
-                items(inputs, 0).iter().filter_map(|x| if let Sel::Edge { point, .. } = x { Some(pt(*point)) } else { None }).collect();
+            let (body, edges) = body_and_edges(items(inputs, 0))?;
             let mode = RULED_MODES.get(*mode).map_or("normal", |(_, m)| *m);
             let mut p = json!({"body": body, "edges": edges, "distance": distance, "mode": mode});
             if mode == "angle" {
