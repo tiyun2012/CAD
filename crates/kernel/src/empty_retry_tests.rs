@@ -33,11 +33,19 @@ fn shallow_cut_after_a_pocket_recovers_from_empty_numerical_attempts() {
 }
 
 #[test]
-fn unrecovered_empty_attempts_keep_the_outer_guard_refusal() {
+fn unrecovered_empty_attempts_keep_refusal_without_displacing_tool() {
+    // These spheres keep fine_tols empty, isolating retries after the exact local strategies.
     let target = sphere(Vec3::ZERO, 10.0).unwrap();
     let tool = sphere(Vec3::new(8.0, 0.0, 0.0), 5.0).unwrap();
-    let empty = |_: &Body, _: &Body, _: BoolOp, _: Option<mt::Vector3>, _: f64| Ok((Solid::new_unchecked(Vec::new()), None));
+    let shifted_attempts = Cell::new(0);
+    let empty = |_: &Body, _: &Body, _: BoolOp, shift: Option<mt::Vector3>, _: f64| {
+        if shift.is_some() {
+            shifted_attempts.set(shifted_attempts.get() + 1);
+        }
+        Ok((Solid::new_unchecked(Vec::new()), None))
+    };
     let result = boolean_via(&target, &tool, BoolOp::Cut, &|a, b, op| boolean_whole_with(a, b, op, false, &empty));
+    assert_eq!(shifted_attempts.get(), 0, "unrecovered empty attempts must not enable displaced retries");
     let error = result.unwrap_err();
     assert!(error.to_string().contains("it came out empty"), "{error}");
 }
