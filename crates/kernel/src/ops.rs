@@ -921,7 +921,8 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
     // nothing to cut, so it returns both operands side by side (#396). Volume and point
     // sampling cannot see that; the shell grouping can. Only contact over an area counts
     // (bodies tangent along a line stay two lumps), and operands already like that, saved
-    // before this was caught, stay joinable.
+    // before this was caught, stay joinable. Nor can they see a skin of no thickness left over
+    // a hole by a tool ending in a face of the target ([`crate::coplanar::has_skin`]).
     let unfused = |r: &Body| {
         op == BoolOp::Union
             && r.shell_count() > 1
@@ -937,7 +938,7 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
         if !bounds {
             return (false, v);
         }
-        if unfused(r) {
+        if unfused(r) || crate::coplanar::has_skin(r, &mr) {
             return (false, v);
         }
         let consistent = match &meshes {
