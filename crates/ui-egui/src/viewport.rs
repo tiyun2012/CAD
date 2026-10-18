@@ -3381,11 +3381,13 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let painter = ui.painter_at(rect);
     painter.circle(c, 55.0, t.overlay.gamma_multiply(0.35), Stroke::new(1.0, t.border.gamma_multiply(0.75)));
     for (i, (name, d, at, depth)) in tips.iter().enumerate() {
+        if i == 3 {
+            // The origin dot sits behind the three front axes and over the three back ones.
+            painter.circle(c, 3.6, t.text.gamma_multiply(0.9), Stroke::new(1.4, t.panel));
+        }
         crate::icons::navigation::axis_tip(&painter, c, name, d, *at, *depth, hovered == Some(i), t);
         crate::scenario::publish_handle(&format!("axis_view:{name}"), *at);
     }
-    // The origin: a light dot with a dark ring over the axes' round ends.
-    painter.circle(c, 3.6, t.text.gamma_multiply(0.9), Stroke::new(1.4, t.panel));
     crate::scenario::publish_count("axis_view_highlights", f64::from(u8::from(hovered.is_some())));
     if let Some(i) = hovered
         && let Some((name, d, _, _)) = tips.get(i)

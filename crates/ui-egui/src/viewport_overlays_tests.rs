@@ -72,12 +72,12 @@ fn compass_negative_ends_are_hollow_and_positive_ends_are_chunkier() {
             let end = circles.iter().find(|circle| circle.center == painted).unwrap();
             if positive {
                 assert_eq!(end.fill, t.triad[0]);
-                assert_eq!(end.radius, 13.0);
+                assert_eq!(end.radius, 11.0);
                 assert!(output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(text) if text.galley.text() == "X")));
             } else {
                 assert_eq!(end.fill, Color32::TRANSPARENT);
-                assert_eq!(end.stroke.width, 2.6);
-                assert_eq!(end.radius, 5.6);
+                assert_eq!(end.stroke.width, 2.4);
+                assert_eq!(end.radius, 4.8);
                 assert!(!output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(_))));
             }
             for shape in &output.shapes {
@@ -255,5 +255,34 @@ fn three_dimensional_sketch_rubber_band_uses_sketch_accent() {
             assert!(crate::sketch3d::preview(&h.app, h.app.tool.as_ref().unwrap(), ui.painter(), &proj));
         });
         assert!(output.shapes.iter().any(|s| sketch_stroke(&s.shape, Tokens::get().sketch_accent)));
+    }
+}
+
+#[test]
+fn a_hovered_compass_end_turns_white_and_its_letter_takes_the_axis_colour() {
+    for dark in [false, true] {
+        let t = Tokens::themed(dark, crate::theme::ColorVision::Off);
+        for (name, direction, positive) in [("x", Vec3::X, true), ("-x", -Vec3::X, false)] {
+            let ctx = egui::Context::default();
+            let c = pos2(100.0, 100.0);
+            let original = c + vec2(38.0, 0.0);
+            let painted = c + (original - c) * 0.84;
+            let output = draw(&ctx, |ui| {
+                crate::icons::navigation::axis_tip(ui.painter(), c, name, &direction, original, 0.5, true, t);
+            });
+            let circles: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Circle(c) = &s.shape { Some(c) } else { None }).collect();
+            assert!(circles.iter().any(|circle| circle.center == painted && circle.fill == t.on_accent), "{name}: the hovered end is filled white");
+            let letters: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Text(text) = &s.shape { Some(text) } else { None }).collect();
+            if positive {
+                assert!(
+                    !letters.is_empty()
+                        && letters.iter().all(|text| text.override_text_color == Some(t.triad[0])
+                            || text.galley.job.sections.iter().all(|s| s.format.color == t.triad[0])),
+                    "the letter takes the axis colour"
+                );
+            } else {
+                assert!(letters.is_empty());
+            }
+        }
     }
 }

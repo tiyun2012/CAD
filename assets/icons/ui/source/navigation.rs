@@ -164,11 +164,11 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     // Keep picking at the original tips; only the artwork moves inward, leaving
     // more breathing room inside the unchanged 55 px compass background.
     let at = c + (at - c) * 0.84;
-    let radius = if positive { 13.0 } else { 5.6 };
+    let radius = if positive { 11.0 } else { 4.8 };
     let direction = (at - c).normalized();
     let width = 3.6;
     // A negative shaft stops at the outer edge of its ring; a positive one runs under its disc.
-    let end = if positive { at - direction * radius } else { at - direction * (radius + 1.3) };
+    let end = if positive { at - direction * radius } else { at - direction * (radius + 1.2) };
     painter.line_segment([c, end], Stroke::new(width, ink));
     // The round cap sits at the origin; the other end is covered by the disc or ring.
     painter.circle_filled(c, width / 2.0, ink);
@@ -176,19 +176,21 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         painter.circle_filled(at, radius, col);
     }
     // Negative tips are hollow: neither the axis shaft nor a fill covers their
-    // centres, so the translucent compass background shows through.
+    // centres, so the translucent compass background shows through. A hovered tip of either
+    // kind turns fully white.
     if hovered {
-        painter.circle_filled(at, radius, t.accent_soft);
+        painter.circle_filled(at, radius, t.on_accent);
     }
     if positive {
-        // The letters are heavy: egui's regular face gets a small overstrike for weight.
-        let letter = if hovered { ink } else { t.on_accent };
+        // The letters are heavy: egui's regular face gets a small overstrike for weight. On a
+        // hovered (white) disc the letter takes the axis colour.
+        let letter = if hovered { col } else { t.on_accent };
         let label = name.to_uppercase();
-        for dx in [-0.5, 0.5] {
-            painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(15.5), letter);
+        for dx in [-0.45, 0.45] {
+            painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(13.5), letter);
         }
     }
     if !positive || hovered {
-        painter.circle_stroke(at, radius, Stroke::new(2.6, if hovered { t.accent } else { ink }));
+        painter.circle_stroke(at, radius, Stroke::new(2.4, if hovered { t.on_accent } else { ink }));
     }
 }
