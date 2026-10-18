@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 type SPoint2 = spade::Point2<f64>;
 type Cdt = ConstrainedDelaunayTriangulation<SPoint2>;
-type VertexId = spade::handles::FixedVertexHandle;
+type VertexId = handles::FixedVertexHandle;
 type MeshedShell = Shell<Point3, PolylineCurve, Option<PolygonMesh>>;
 type MeshedCShell = CompressedShell<Point3, PolylineCurve, Option<PolygonMesh>>;
 
