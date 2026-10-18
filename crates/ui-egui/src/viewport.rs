@@ -3298,8 +3298,14 @@ pub(crate) fn refresh_layout(app: &mut SolveApp, scale: f32) {
 
 /// Orientation controls share the layout reservation used by model fitting.
 fn axis_center(app: &SolveApp, rect: Rect) -> Pos2 {
-    axis_rect(app, rect).center()
+    let c = axis_rect(app, rect).center();
+    // The compass sits a little higher in its reserved box (less margin above, the same on the
+    // right); the box itself is unchanged.
+    if app.preferences.navigator_style == crate::prefs::NavigatorStyle::Axes { c - vec2(0.0, AXIS_CENTER_LIFT) } else { c }
 }
+
+/// How far the signed-axis compass is lifted inside its reserved box.
+pub(crate) const AXIS_CENTER_LIFT: f32 = 4.0;
 
 pub(crate) fn axis_rect(app: &SolveApp, rect: Rect) -> Rect {
     app.viewport.layout.as_ref().filter(|l| l.viewport == rect).map(|l| l.axis_view).unwrap_or_else(|| {

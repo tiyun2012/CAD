@@ -31,9 +31,10 @@ fn compass_keeps_signed_targets_hover_and_clicks_at_both_scales() {
             for (name, direction) in [("x", Vec3::X), ("-x", -Vec3::X), ("y", Vec3::Y), ("-y", -Vec3::Y), ("z", Vec3::Z), ("-z", -Vec3::Z)] {
                 h.call("ui.view", json!({"view":"home"}));
                 h.settle();
-                let tips = axis_tips(&h.app.cam, outer.center());
+                let centre = outer.center() - vec2(0.0, crate::viewport::AXIS_CENTER_LIFT);
+                let tips = axis_tips(&h.app.cam, centre);
                 let (r, u, _) = h.app.cam.basis();
-                let p = outer.center() + vec2((direction.dot(r) * 38.0 * 0.84) as f32, -(direction.dot(u) * 38.0 * 0.84) as f32);
+                let p = centre + vec2((direction.dot(r) * 38.0 * 0.84) as f32, -(direction.dot(u) * 38.0 * 0.84) as f32);
                 assert_eq!(crate::scenario::handle_at(&format!("axis_view:{name}")), Some(p));
                 for offset in [vec2(0.0, 0.0), vec2(14.9, 0.0), vec2(15.1, 0.0)] {
                     let sample = p + offset;
