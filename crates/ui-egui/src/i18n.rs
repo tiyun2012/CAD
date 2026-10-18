@@ -379,6 +379,73 @@ mod tests {
         }
     }
 
+    /// `label()` resolves a literal by its English text (or, failing that, an id), `text()` only
+    /// by id. A literal neither reaches is shown verbatim in every locale and nothing fails, so
+    /// the call forms the dialogs, the preferences page and the selection rows use are all read
+    /// from the source. This covers every non-test file under `src/`; the older
+    /// `direct_ui_message_ids_exist_in_english_catalog` only saw a hand-written file list and the
+    /// `.tr(` / `i18n::format(` forms.
+    #[test]
+    fn every_ui_label_literal_reaches_an_english_catalog_entry() {
+        let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+        let ids: BTreeSet<&str> = english.keys().map(String::as_str).collect();
+        let texts: BTreeSet<&str> = english.values().filter(|text| !text.contains('{')).map(String::as_str).collect();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        source_files(&root, &mut files);
+        files.sort();
+        let mut missing: Vec<String> = Vec::new();
+        for path in files {
+            let raw = std::fs::read_to_string(&path).unwrap();
+            let source = without_test_items(&raw);
+            let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+            for (at, literal) in literal_args(&source, "tr_label(", &[]) {
+                check_literal(&source, &shown, at, literal, false, &ids, &texts, &mut missing);
+            }
+            // `row_label` and a `SelInput` label both strip a leading indent before translating.
+            for (at, literal) in literal_args(&source, "row_label(", &["ui", ","]) {
+                check_literal(&source, &shown, at, literal.trim_start(), false, &ids, &texts, &mut missing);
+            }
+            for (at, literal) in literal_args(&source, "SelInput::new(", &[]) {
+                check_literal(&source, &shown, at, literal.trim_start(), false, &ids, &texts, &mut missing);
+            }
+            // A qualified `i18n::tr("…")` (with or without the `crate::` prefix) is always an id.
+            for (at, literal) in literal_args(&source, "i18n::tr(", &[]) {
+                check_literal(&source, &shown, at, literal, true, &ids, &texts, &mut missing);
+            }
+            // The dialogs' own `tr` wraps `tr_label` (label semantics); an imported `i18n::tr`
+            // keeps the id semantics of the module it comes from.
+            let label_semantics = source.contains("fn tr(text: &str) -> &str") || source.contains("let tr = crate::i18n::tr_label;");
+            let id_semantics = source.contains("use crate::i18n::tr;") || imports_i18n_tr(&source);
+            if label_semantics || id_semantics {
+                for (at, literal) in bare_tr_literals(&source) {
+                    check_literal(&source, &shown, at, literal, id_semantics && !label_semantics, &ids, &texts, &mut missing);
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "{} literal(s) would stay English in every locale because no English catalog entry reaches them:\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        );
+    }
+
+    /// The Preferences help line is assembled from catalog messages only now. It must read
+    /// exactly like the formula it replaced, for every preset: the snap hint is part of every
+    /// preset's sentence but OpenSCAD's, and the Touchpad preset keeps `nav.touchpad.help`.
+    #[test]
+    fn navigation_help_comes_from_the_catalog_unchanged() {
+        let english = Locale::for_language("en");
+        let snap_text = english.text("nav.help.snap");
+        for preset in crate::prefs::NAV_PRESETS.iter().filter(|p| p.id != crate::prefs::TOUCHPAD_NAV) {
+            let snap = if preset.id == crate::prefs::OPENSCAD_NAV { "" } else { snap_text };
+            let expected = format!("{}; Ctrl+left drag on empty space orbits{snap}; hold Space to pan; the wheel zooms", preset.help);
+            let id = format!("nav.{}.help", preset.id);
+            assert_eq!(english.format(&id, &[("snap", snap)]), expected, "{id}");
+        }
+    }
+
     #[test]
     fn keys_and_engine_labels_translate_with_english_fallback() {
         let ja = Locale::for_language("ja");
@@ -661,5 +728,199 @@ mod tests {
             assert_eq!(tr("ui.preferences"), "環境設定");
         }
         assert_eq!(tr("ui.preferences"), "Preferences");
+    }
+
+    /// Record `literal` unless the English catalog reaches it: as an id, or — for label semantics
+    /// — as an English text without a placeholder.
+    fn check_literal(
+        source: &str,
+        shown: &str,
+        at: usize,
+        literal: &str,
+        id_only: bool,
+        ids: &BTreeSet<&str>,
+        texts: &BTreeSet<&str>,
+        missing: &mut Vec<String>,
+    ) {
+        // An empty literal is the blank spacer cell the dialogs lay out with `row_label(ui, "")`;
+        // there is nothing to translate and so no catalog entry to want.
+        if literal.is_empty() {
+            return;
+        }
+        let reached = ids.contains(literal) || (!id_only && texts.contains(literal));
+        if !reached {
+            let line = source[..at].chars().filter(|c| *c == '\n').count() + 1;
+            missing.push(format!("{shown}:{line}: `{literal}`"));
+        }
+    }
+
+    /// Every `.rs` file under `dir` except test modules (`*_tests.rs`, `tests.rs`).
+    fn source_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                source_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                if name != "tests.rs" && !name.ends_with("_tests.rs") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    /// The source with `#[cfg(test)]` items blanked out, keeping its length so line numbers hold.
+    fn without_test_items(source: &str) -> String {
+        let mut out = source.as_bytes().to_vec();
+        let mut from = 0;
+        while let Some(rel) = source[from..].find("#[cfg(test)]") {
+            let at = from + rel;
+            let after = at + "#[cfg(test)]".len();
+            let semi = source[after..].find(';').map(|i| after + i);
+            let brace = source[after..].find('{').map(|i| after + i);
+            if let Some(open) = brace.filter(|open| semi.is_none_or(|semi| semi > *open)) {
+                let end = matching_brace(source, open);
+                for byte in &mut out[at..end] {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                from = end;
+            } else {
+                // `#[cfg(test)] mod tests;`: a whole test-only file; nothing here to blank.
+                from = semi.map_or(source.len(), |semi| semi + 1);
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// The offset just past the `}` matching the `{` at `open`, skipping string, char and comment
+    /// bodies (a test module's text may hold braces).
+    fn matching_brace(source: &str, open: usize) -> usize {
+        let bytes = source.as_bytes();
+        let mut depth = 0usize;
+        let mut i = open;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'"' => i = skip_quoted(source, i, b'"'),
+                b'\'' if is_char_literal(source, i) => i = skip_quoted(source, i, b'\''),
+                b'/' if bytes.get(i + 1) == Some(&b'/') => i = source[i..].find('\n').map_or(source.len(), |n| i + n),
+                b'/' if bytes.get(i + 1) == Some(&b'*') => i = source[i..].find("*/").map_or(source.len(), |n| i + n + 2),
+                b'{' => {
+                    depth += 1;
+                    i += 1;
+                }
+                b'}' => {
+                    depth -= 1;
+                    i += 1;
+                    if depth == 0 {
+                        return i;
+                    }
+                }
+                _ => i += 1,
+            }
+        }
+        source.len()
+    }
+
+    /// The offset past the `quote` closing the literal that opens at `at`.
+    fn skip_quoted(source: &str, at: usize, quote: u8) -> usize {
+        let bytes = source.as_bytes();
+        let mut i = at + 1;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                i += 2;
+            } else if bytes[i] == quote {
+                return i + 1;
+            } else {
+                i += 1;
+            }
+        }
+        bytes.len()
+    }
+
+    /// Whether the `'` at `at` opens a char literal (`'x'`, `'\n'`, `'\u{…}'`) rather than a
+    /// lifetime.
+    fn is_char_literal(source: &str, at: usize) -> bool {
+        let bytes = source.as_bytes();
+        match (bytes.get(at + 1).copied(), bytes.get(at + 2).copied()) {
+            (Some(b'\\'), Some(b'u')) => true,
+            (Some(b'\\'), Some(_)) => bytes.get(at + 3) == Some(&b'\''),
+            (Some(_), Some(b'\'')) => true,
+            _ => false,
+        }
+    }
+
+    /// Every `"…"` literal passed at a `call` site. `args` are the tokens between the `(` and the
+    /// literal (`[]`, or `["ui", ","]` for `row_label`); whitespace and line breaks between them
+    /// are skipped, so a call the formatter wrapped still counts.
+    fn literal_args<'a>(source: &'a str, call: &str, args: &[&str]) -> Vec<(usize, &'a str)> {
+        let mut out = Vec::new();
+        for (at, _) in source.match_indices(call) {
+            let mut pos = at + call.len();
+            let mut valid = true;
+            for expected in args {
+                pos = skip_whitespace(source, pos);
+                if source[pos..].starts_with(expected) {
+                    pos += expected.len();
+                } else {
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                pos = skip_whitespace(source, pos);
+                if source[pos..].starts_with('"') {
+                    let (literal, _) = read_string(&source[pos..]);
+                    out.push((at, literal));
+                }
+            }
+        }
+        out
+    }
+
+    /// `tr("…")` calls that are neither a method (`app.tr(`), a qualified path (`i18n::tr(`) nor
+    /// part of a longer name (`trf(`).
+    fn bare_tr_literals(source: &str) -> Vec<(usize, &str)> {
+        let mut out = Vec::new();
+        for (at, _) in source.match_indices("tr(\"") {
+            let before = source[..at].chars().next_back();
+            if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == ':' || c == '.') {
+                continue;
+            }
+            let (literal, _) = read_string(&source[at + 3..]);
+            out.push((at + 3, literal));
+        }
+        out
+    }
+
+    /// Whether the file imports `tr` from `crate::i18n` inside a use list.
+    fn imports_i18n_tr(source: &str) -> bool {
+        source.match_indices("use crate::i18n::{").any(|(at, marker)| {
+            let rest = &source[at + marker.len()..];
+            let list = rest.split_once('}').map_or(rest, |(list, _)| list);
+            list.split(',').any(|item| item.split(" as ").next().is_some_and(|name| name.trim() == "tr"))
+        })
+    }
+
+    /// The text between the quotes opening at `source[0]`, backslash escapes left as written.
+    fn read_string(source: &str) -> (&str, usize) {
+        let bytes = source.as_bytes();
+        let mut end = 1;
+        while end < bytes.len() && bytes[end] != b'"' {
+            end += if bytes[end] == b'\\' { 2 } else { 1 };
+        }
+        (&source[1..end.min(source.len())], (end + 1).min(source.len()))
+    }
+
+    fn skip_whitespace(source: &str, mut at: usize) -> usize {
+        while let Some(c) = source.get(at..).and_then(|rest| rest.chars().next()) {
+            if !c.is_whitespace() {
+                break;
+            }
+            at += c.len_utf8();
+        }
+        at
     }
 }

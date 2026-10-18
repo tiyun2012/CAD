@@ -290,3 +290,28 @@ fn long_panel_label_wraps_centred_and_its_button_is_centred() {
     assert!(rows.iter().all(|row| lr.contains_rect(*row)), "the highlight holds both lines: {lr:?} {rows:?}");
     out.textures_delta.clear();
 }
+
+/// The reference labels of the cataloguing fix: a label passed as text (`Cylindrical face`), an
+/// id (`thread.iso_metric`) and an indented row label (`  Of`).
+#[test]
+fn newly_catalogued_dialog_labels_show_in_german() {
+    let mut h = Harness::new();
+    h.app.preferences.language = "de".into();
+    h.app.home.open = false;
+    h.call("ui.start", json!({"command":"solid.thread"}));
+    h.frames(3);
+    assert!(h.widget("Zylindrische Fläche").is_some(), "the Cylindrical face row must be translated");
+    assert!(h.widget("ISO metrisch").is_some(), "the thread.iso_metric label must be translated");
+    assert!(h.widget("ISO metric").is_none(), "the label must not fall back to English");
+}
+
+/// A leading row indent stays in front of the translated text (`"  Of"` in the motion and trace
+/// dialogs); the lookup itself uses the text without the indent.
+#[test]
+fn an_indented_row_label_keeps_its_indent_in_front_of_the_translation() {
+    let _de = crate::i18n::scope("de");
+    assert_eq!(crate::dialogs::indented_label("  Of"), "  Freiheitsgrad");
+    assert_eq!(crate::dialogs::indented_label("Of"), "Freiheitsgrad");
+    let _en = crate::i18n::scope("en");
+    assert_eq!(crate::dialogs::indented_label("  Of"), "  Of");
+}
