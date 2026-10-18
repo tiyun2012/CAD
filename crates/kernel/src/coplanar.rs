@@ -905,12 +905,19 @@ fn apart_with(a: &Body, b: &Body, op: BoolOp, grow: bool) -> Option<Result<Optio
         } else if op == BoolOp::Union {
             for (n, d) in &same {
                 let slab = slab_beyond(*n, *d, d1.max(d2) * 3.0, size * 4.0)?;
-                match crate::ops::boolean(&r, &slab, BoolOp::Cut)? {
-                    Some(x) => {
+                match crate::ops::boolean(&r, &slab, BoolOp::Cut) {
+                    Ok(Some(x)) => {
                         h = h.and_then(|h| trimmed(&x, h, &slab, [a, b], *n, *d, tol));
                         r = x;
                     }
-                    None => return Ok(None),
+                    Ok(None) => return Ok(None),
+                    // An edge of the union can lie in the plane, where a pushed side crosses a side
+                    // of the other body (a prism's edge in the plane lying in a slab's end face):
+                    // the cut along it fails, and the same trim is made by editing the faces.
+                    Err(e) => {
+                        r = trim_exact(&r, *n, *d).map_err(|_| e)?;
+                        h = None;
+                    }
                 }
             }
         }
