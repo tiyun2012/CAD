@@ -241,3 +241,24 @@ fn an_edge_on_the_cut_face_draws_over_the_cap() {
         }
     }
 }
+
+#[test]
+fn contribution_gpu_quarter_section_caps_both_planes_with_both_depth_formats() {
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+    s.execute("inspect.section", &json!({"plane":"YZ","at":5,"second":{"plane":"XZ","at":5,"flip":true}})).unwrap();
+    let cam = Camera { target: Vec3::new(5.0, 5.0, 5.0), distance: 30.0, ..Default::default() };
+    let scene = view::scene_with_guides(&s, &cam, s.section, Guides { grid: false, axes: false });
+    let vp = cam.view_proj(1.0, scene.radius);
+    for (mode, c) in capturers() {
+        let image = c.rgba(&scene, &cam, 200, 200).unwrap();
+        for point in [Vec3::new(5.0, 2.5, 5.0), Vec3::new(7.5, 5.0, 5.0)] {
+            let q = vp.apply(point);
+            let x = ((q[0] / q[3] + 1.0) * 100.0) as usize;
+            let y = ((1.0 - q[1] / q[3]) * 100.0) as usize;
+            let i = (y * 200 + x) * 4;
+            let rgb = &image[i..i + 3];
+            assert!(i16::from(rgb[0]) > i16::from(rgb[2]) + 10, "{mode}, {point:?}: {rgb:?}");
+        }
+    }
+}

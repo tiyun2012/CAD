@@ -196,6 +196,10 @@ pub enum Kind {
     Section {
         offset: String,
         flip: bool,
+        quarter: bool,
+        second_plane: usize,
+        second_offset: String,
+        second_flip: bool,
     },
     /// Measure one or two picked items (vertices, edges, faces): the result of the last
     /// measurement and the items it was for.
@@ -548,7 +552,39 @@ impl Dialog {
             ),
             "material.assign" => Dialog::new(Kind::Material { index: 1 }, vec![SelInput::new("Bodies", BODIES, true)]),
             "inspect.section" => {
-                Dialog::new(Kind::Section { offset: "0 mm".into(), flip: false }, vec![SelInput::new("Plane", PLANES | PLANAR_FACES, false)])
+                let mut d = Dialog::new(
+                    Kind::Section {
+                        offset: "0 mm".into(),
+                        flip: false,
+                        quarter: false,
+                        second_plane: 1,
+                        second_offset: "0 mm".into(),
+                        second_flip: false,
+                    },
+                    vec![SelInput::new("Plane", PLANES | PLANAR_FACES, false)],
+                );
+                if let Some((o, n)) = app.session.section {
+                    d.extra.insert("section_plane".into(), json!({"origin": o, "normal": n}));
+                    if let Kind::Section { quarter, second_plane, second_offset, second_flip, .. } = &mut d.kind {
+                        *quarter = app.session.section_second.is_some();
+                        if let Some((o, n)) = app.session.section_second {
+                            *second_plane = 3;
+                            d.extra.insert("section_second_plane".into(), json!({"origin": o, "normal": n}));
+                            for (i, name) in ["XY", "XZ", "YZ"].iter().enumerate() {
+                                if let Some(pl) = solidcraft_engine::geom::Plane::named(name) {
+                                    let dot = pl.normal().dot(n);
+                                    if dot.abs() > 1.0 - 1e-9 {
+                                        *second_plane = i;
+                                        *second_offset = format!("{} mm", pl.normal().dot(o));
+                                        *second_flip = dot < 0.0;
+                                        d.extra.remove("section_second_plane");
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                d
             }
             "inspect.measure" => Dialog::new(
                 Kind::Measure { result: None, of: Vec::new(), show: None },
@@ -2856,7 +2892,30 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         combo(ui, "mat", &names, index);
                         ui.end_row();
                     }
-                    Kind::Section { offset, flip } => {
+                    Kind::Section { offset, flip, quarter, second_plane, second_offset, second_flip } => {
+                        row_label(ui, "");
+                        if ui.button(tr("Remove Section")).clicked() && app.run("inspect.section", json!({"clear": true})).is_ok() {
+                            app.tree.hidden_section = None;
+                            app.tree.hidden_section_second = None;
+                            cancel = true;
+                        }
+                        ui.end_row();
+                        row_label(ui, "Quarter section");
+                        ui.checkbox(quarter, "");
+                        ui.end_row();
+                        if *quarter {
+                            row_label(ui, "Second plane");
+                            let planes: &[&str] =
+                                if d.extra.contains_key("section_second_plane") { &["XY", "XZ", "YZ", "Current plane"] } else { &["XY", "XZ", "YZ"] };
+                            combo(ui, "section_second", planes, second_plane);
+                            ui.end_row();
+                            row_label(ui, "Second offset");
+                            enter |= field(ui, second_offset);
+                            ui.end_row();
+                            row_label(ui, "Second flip");
+                            ui.checkbox(second_flip, "");
+                            ui.end_row();
+                        }
                         row_label(ui, "Distance");
                         enter |= field(ui, offset);
                         ui.end_row();
@@ -4187,8 +4246,10 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             let name = s.doc.material_names().get(*index).cloned().unwrap_or_else(|| "Default".into());
             ("material.assign", json!({"bodies": body_names(0), "material": name}))
         }
-        Kind::Section { offset, flip } => {
-            need(0, "a plane or planar face")?;
+        Kind::Section { offset, flip, quarter, second_plane, second_offset, second_flip } => {
+            if d.extra.get("section_plane").is_none() {
+                need(0, "a plane or planar face")?;
+            }
             let plane = match sels(d, 0).first() {
                 Some(Sel::Plane { name }) if matches!(name.as_str(), "XY" | "XZ" | "YZ") => json!(name),
                 Some(Sel::Face { body, index, point }) => {
@@ -4203,9 +4264,19 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                         .ok_or("unknown plane")?;
                     json!({"origin": pt(pl.origin), "normal": pt(pl.normal())})
                 }
-                _ => return Err("pick a plane or a planar face".into()),
+                _ => d.extra.get("section_plane").cloned().ok_or("pick a plane or a planar face")?,
             };
-            ("inspect.section", json!({"plane": plane, "offset": offset, "flip": flip}))
+            {
+                let mut p = json!({"plane": plane, "offset": offset, "flip": flip});
+                if *quarter {
+                    let plane = match ["XY", "XZ", "YZ"].get(*second_plane) {
+                        Some(name) => json!(name),
+                        None => d.extra.get("section_second_plane").cloned().ok_or("select a second plane")?,
+                    };
+                    p["second"] = json!({"plane": plane, "offset": second_offset, "flip": second_flip});
+                }
+                ("inspect.section", p)
+            }
         }
         Kind::Move { .. } => return Ok(vec![("solid.move".into(), crate::dialogs_move::params(app, d)?)]),
         Kind::Hole { diameter, depth, kind, cb_diameter, cb_depth, cs_diameter, cs_angle, opts } => {

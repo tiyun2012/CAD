@@ -21,7 +21,7 @@ pub const PBR_SIZE: usize = pbr::VERTEX_SIZE;
 pub const LINE_SIZE: usize = 32;
 /// The shader's `U`: the view-projection matrix, 9 `vec4`s, the 8 analysis colours, their
 /// flags and the depth direction (`uniform_bytes`).
-const UNIFORM_SIZE: u64 = 368;
+const UNIFORM_SIZE: u64 = 384;
 
 /// A body drawn from its display plan, evaluated on the GPU: the plan, and a colour per face
 /// (the plan's face numbering; faces past the end take the last colour).
@@ -229,6 +229,7 @@ pub struct Frame {
     pub size_px: [f32; 2],
     /// Section cut: (normal, d); fragments with normal·p > d are hidden. A zero normal: none.
     pub clip: [f32; 4],
+    pub clip_second: [f32; 4],
     /// Colour of the inside of cut bodies (straight sRGBA, 0..1).
     pub cap: [f32; 4],
     /// Canvases and decals.
@@ -1560,6 +1561,7 @@ pub fn uniform_bytes(cb: &Frame, w: f32, h: f32, linear: bool, reversed: bool) -
     v.extend([cb.back[0], cb.back[1], cb.back[2], if linear { 1.0 } else { 0.0 }]);
     v.extend([w.max(1.0), h.max(1.0), 0.0, if cb.outline { 1.0 } else { 0.0 }]);
     v.extend(cb.clip);
+    v.extend(cb.clip_second);
     v.extend(cb.cap);
     v.extend(cb.analysis);
     match &cb.access {

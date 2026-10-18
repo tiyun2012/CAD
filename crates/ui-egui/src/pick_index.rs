@@ -74,10 +74,14 @@ pub(crate) fn segments_near(index: &MeshIndex, mesh: &Mesh, o: Vec3, d: Vec3, (a
 
 /// The nearest triangle of `mesh` along the ray, through its index.
 pub(crate) fn raycast(index: &MeshIndex, mesh: &Mesh, o: Vec3, d: Vec3) -> Option<(f64, usize)> {
+    raycast_filtered(index, mesh, o, d, |_| true)
+}
+
+pub(crate) fn raycast_filtered(index: &MeshIndex, mesh: &Mesh, o: Vec3, d: Vec3, accept: impl Fn(Vec3) -> bool) -> Option<(f64, usize)> {
     if scanning() {
-        return mesh.raycast(o, d);
+        return mesh.raycast_filtered(o, d, accept);
     }
-    index.raycast(mesh, o, d)
+    index.raycast_filtered(mesh, o, d, accept)
 }
 
 #[cfg(test)]

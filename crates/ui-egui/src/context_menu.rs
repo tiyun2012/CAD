@@ -992,6 +992,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         "ui.clear" => drop(app.run("select.clear", json!({}))),
         "ui.unsection" => {
             app.tree.hidden_section = None;
+            app.tree.hidden_section_second = None;
             drop(app.run("inspect.section", json!({"clear": true})));
         }
         "ui.editSection" => app.start("inspect.section"),

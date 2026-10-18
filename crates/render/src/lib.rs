@@ -32,4 +32,4 @@ pub use curve_display::{PixelCurveView, SampledPath, SamplingBudget, SamplingQua
 pub use gif::gif;
 pub use product::{FaceAppearance, ProductMesh, ProductScene};
 pub use raster::{Canvas, render, render_png, render_transparent};
-pub use scene::{Rgb, SECTION_CAP, Scene, SceneLine, SceneMesh, png};
+pub use scene::{Rgb, SECTION_CAP, Scene, SceneLine, SceneMesh, png, section_clipped, section_segments};

@@ -77,6 +77,7 @@ pub struct TreeState {
     /// A Section Analysis hidden with its eye in the Analysis folder: its plane (origin,
     /// normal), so the eye can bring it back (#822).
     pub hidden_section: Option<(solidcraft_engine::geom::Vec3, solidcraft_engine::geom::Vec3)>,
+    pub hidden_section_second: Option<(solidcraft_engine::geom::Vec3, solidcraft_engine::geom::Vec3)>,
     /// The Analysis folder hidden with its own eye, and the Section Analysis hidden with its
     /// own: the section shows only while neither is, and each eye keeps its state.
     pub analysis_hidden: bool,
@@ -1026,6 +1027,7 @@ fn analysis_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &mut
     if app.session.section.is_some() {
         // A section made (or remade) while an older one was hidden replaces it, shown.
         app.tree.hidden_section = None;
+        app.tree.hidden_section_second = None;
         app.tree.analysis_hidden = false;
         app.tree.section_hidden = false;
     }
@@ -1094,14 +1096,21 @@ pub fn set_section_visible(app: &mut SolveApp, visible: bool) {
     if visible {
         if let Some((origin, normal)) = app.tree.hidden_section {
             let plane = json!({"origin": [origin.x, origin.y, origin.z], "normal": [normal.x, normal.y, normal.z]});
-            if app.run("inspect.section", json!({ "plane": plane })).is_ok() {
+            let mut params = json!({"plane": plane});
+            if let Some((o, n)) = app.tree.hidden_section_second {
+                params["second"] = json!({"plane": {"origin": o, "normal": n}});
+            }
+            if app.run("inspect.section", params).is_ok() {
                 app.tree.hidden_section = None;
+                app.tree.hidden_section_second = None;
             }
         }
-    } else if let Some(section) = app.session.section
-        && app.run("inspect.section", json!({"clear": true})).is_ok()
-    {
-        app.tree.hidden_section = Some(section);
+    } else if let Some(section) = app.session.section {
+        let second = app.session.section_second;
+        if app.run("inspect.section", json!({"clear": true})).is_ok() {
+            app.tree.hidden_section = Some(section);
+            app.tree.hidden_section_second = second;
+        }
     }
 }
 

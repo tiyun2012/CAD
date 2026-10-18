@@ -91,3 +91,64 @@ fn edit_opens_the_section_dialog() {
     menu(&mut h, "Edit Section Analysis");
     assert!(h.app.dialog.is_some(), "the Section Analysis dialog opens");
 }
+
+#[test]
+fn contribution_quarter_section_hide_show_edit_and_delete_retain_both_planes() {
+    let mut h = harness();
+    h.app.run("inspect.section", json!({"plane":"YZ","at":4,"second":{"plane":"XZ","at":6,"flip":true}})).unwrap();
+    let cut = (h.app.session.section, h.app.session.section_second);
+    crate::browser::set_section_visible(&mut h.app, false);
+    assert!(h.app.session.section.is_none() && h.app.session.section_second.is_none());
+    crate::browser::set_section_visible(&mut h.app, true);
+    assert_eq!((h.app.session.section, h.app.session.section_second), cut);
+    h.app.start("inspect.section");
+    let cmds = crate::dialogs::apply_commands(&h.app, h.app.dialog.as_ref().unwrap()).unwrap();
+    let mut scratch = h.app.session.scratch();
+    scratch.execute(&cmds[0].0, &cmds[0].1).unwrap();
+    assert_eq!((scratch.section, scratch.section_second), cut);
+    crate::dialogs::cancel(&mut h.app);
+    assert_eq!((h.app.session.section, h.app.session.section_second), cut);
+    crate::browser::set_section_visible(&mut h.app, false);
+    menu(&mut h, "Delete");
+    assert!(h.app.session.section.is_none() && h.app.session.section_second.is_none());
+    assert!(h.app.tree.hidden_section.is_none() && h.app.tree.hidden_section_second.is_none());
+}
+
+#[test]
+fn contribution_cpu_quarter_section_caps_both_exposed_planes() {
+    use solidcraft_engine::{Session, geom::Vec3};
+    let mut s = Session::default();
+    s.execute("solid.box", &json!({"length":10,"width":10,"height":10})).unwrap();
+    s.execute("inspect.section", &json!({"plane":"YZ","at":5,"second":{"plane":"XZ","at":5,"flip":true}})).unwrap();
+    let cam = solidcraft_engine::render::Camera { target: Vec3::new(5.0, 5.0, 5.0), distance: 30.0, ..Default::default() };
+    let scene = solidcraft_engine::view::scene(&s, &cam);
+    let image = solidcraft_engine::render::render(&scene, &cam, 200, 200);
+    let vp = cam.view_proj(1.0, scene.radius);
+    for point in [Vec3::new(5.0, 2.5, 5.0), Vec3::new(7.5, 5.0, 5.0)] {
+        let q = vp.apply(point);
+        let x = ((q[0] / q[3] + 1.0) * 100.0) as usize;
+        let y = ((1.0 - q[1] / q[3]) * 100.0) as usize;
+        let i = (y * 200 + x) * 4;
+        let rgb = &image.rgba[i..i + 3];
+        assert!(i < image.rgba.len() && i16::from(rgb[0]) > i16::from(rgb[2]) + 10, "{point:?}: {rgb:?}");
+    }
+}
+
+#[test]
+fn contribution_quarter_section_respects_both_browser_eyes() {
+    let mut h = harness();
+    h.app.run("inspect.section", json!({"plane":"YZ","at":4,"second":{"plane":"XZ","at":6,"flip":true}})).unwrap();
+    h.frames(3);
+    let cut = (h.app.session.section, h.app.session.section_second);
+    click(&mut h, "eye:Analysis");
+    assert!(h.app.session.section.is_none() && h.app.session.section_second.is_none());
+    assert_eq!((h.app.tree.hidden_section, h.app.tree.hidden_section_second), cut);
+    click(&mut h, "eye:Section Analysis");
+    click(&mut h, "eye:Analysis");
+    assert!(h.app.session.section.is_none() && h.app.session.section_second.is_none());
+    click(&mut h, "eye:Section Analysis");
+    assert_eq!((h.app.session.section, h.app.session.section_second), cut);
+    assert!(h.app.tree.hidden_section.is_none() && h.app.tree.hidden_section_second.is_none());
+    menu(&mut h, "Delete");
+    assert!(h.app.session.section.is_none() && h.app.session.section_second.is_none());
+}

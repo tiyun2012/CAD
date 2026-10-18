@@ -298,6 +298,7 @@ fn scene_key(app: &SolveApp) -> u64 {
     lod_generation(app).hash(&mut h);
     // The section plane (its cut outlines are part of the model scene).
     section_plane(app).map(|(o, n)| [o.x, o.y, o.z, n.x, n.y, n.z].map(f64::to_bits)).hash(&mut h);
+    section_second(app).map(|(o, n)| [o.x, o.y, o.z, n.x, n.y, n.z].map(f64::to_bits)).hash(&mut h);
     app.cam.up.hash(&mut h);
     (app.cam.pitch > 0.0).hash(&mut h);
     app.ui.show_sketches.hash(&mut h);
@@ -691,11 +692,17 @@ fn build_scene(app: &SolveApp) -> GpuScene {
         ground_shadow(&mut sc, app, &st);
     }
     // Section: the outline of each body where the plane cuts it.
-    if let Some((o, n)) = section_plane(app) {
+    let first = section_plane(app);
+    let second = section_second(app);
+    for (plane, other) in [(first, second), (second, first)] {
+        let Some((o, n)) = plane else { continue };
         let col = c4(tk.text.gamma_multiply(0.9));
         for b in st.bodies.iter().filter(|b| app.session.body_visible(&b.name)) {
             for (a, c) in solidcraft_engine::view::section_segments(&b.mesh(), o, n) {
-                sc.line(a.to_f32(), c.to_f32(), col, 1.8, false);
+                let clip = other.map(|(o, n)| (-n, -n.dot(o)));
+                for (a, c) in solidcraft_engine::render::section_segments(a, c, clip, None) {
+                    sc.line(a.to_f32(), c.to_f32(), col, 1.8, false);
+                }
             }
         }
     }
@@ -1212,6 +1219,9 @@ fn pick_hits(app: &SolveApp, proj: &Proj, pos: Pos2, other_sketch_points: bool, 
     let bounds = body_bounds(app, &st);
     let mut hits = Vec::new();
     let (o, d) = proj.ray(pos);
+    let clip = section_plane(app).map(|(o, n)| (n, n.dot(o)));
+    let clip_second = section_second(app).map(|(o, n)| (n, n.dot(o)));
+    let kept = |p| !solidcraft_engine::render::section_clipped(p, clip, clip_second);
     // Sketch points of the active sketch (of every shown sketch while a command takes points,
     // while idle or projecting, and while 3D drawing snaps to points on other visible sketches).
     let wants_points = app.dialog.as_ref().and_then(|d| d.active_input()).is_some_and(|i| i.accept & crate::selection::POINTS != 0);
@@ -1290,7 +1300,11 @@ fn pick_hits(app: &SolveApp, proj: &Proj, pos: Pos2, other_sketch_points: bool, 
             }
         }
         let m = b.mesh();
-        if let Some((t, ti)) = crate::pick_index::raycast(&app.viewport.pick_index.of(&m), &m, o, d) {
+        if let Some((t, ti)) = if clip.is_none() {
+            crate::pick_index::raycast(&app.viewport.pick_index.of(&m), &m, o, d)
+        } else {
+            crate::pick_index::raycast_filtered(&app.viewport.pick_index.of(&m), &m, o, d, kept)
+        } {
             let fi = m.tri_face.get(ti).copied().unwrap_or(0) as usize;
             let hit = Hit::Face { body: b.name.clone(), index: fi, point: o + d * t };
             if bestf.as_ref().is_none_or(|(bt, _)| t < *bt) {
@@ -1304,7 +1318,7 @@ fn pick_hits(app: &SolveApp, proj: &Proj, pos: Pos2, other_sketch_points: bool, 
     let slack = scene_radius(app) * 0.02;
     // Wireframe draws no faces, so nothing hides an edge or a vertex.
     let wireframe = app.ui.visual_style == 2;
-    let visible = |p: Vec3| wireframe || bestf.as_ref().is_none_or(|(t, _)| (p - o).dot(d) <= *t + slack);
+    let visible = |p: Vec3| kept(p) && (wireframe || bestf.as_ref().is_none_or(|(t, _)| (p - o).dot(d) <= *t + slack));
     // Vertices (edge end points) and edges, within 7 and 6 points of the cursor.
     let reach = crate::pick_index::reach(proj, pos, 8.0);
     // The edges seen near the cursor, when the GPU pick buffer has them for this view (Select
@@ -1440,6 +1454,16 @@ fn pick_hits(app: &SolveApp, proj: &Proj, pos: Pos2, other_sketch_points: bool, 
 pub fn active_view(app: &SolveApp) -> solidcraft_engine::sketch::SketchView {
     let st = app.session.world_state();
     app.session.active_sketch.and_then(|s| st.sketch(s)).map(|ss| ss.sketch.view.clone()).unwrap_or_default()
+}
+
+pub fn section_second(app: &SolveApp) -> Option<(Vec3, Vec3)> {
+    if let Some(d) = app.dialog.as_ref().filter(|d| matches!(d.kind, crate::dialogs::Kind::Section { .. })) {
+        let (_, p) = crate::dialogs::apply_commands(app, d).ok()?.into_iter().next()?;
+        let mut scratch = app.session.scratch();
+        scratch.execute("inspect.section", &p).ok()?;
+        return scratch.section_second;
+    }
+    app.session.section.and(app.session.section_second)
 }
 
 pub fn section_plane(app: &SolveApp) -> Option<(Vec3, Vec3)> {
@@ -2405,6 +2429,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             pv_key: app.preview.key,
             pv_slot: app.preview.slot.clone(),
             clip: section_clip(app),
+            clip_second: section_second(app).map_or([0.0; 4], |(o, n)| [n.x as f32, n.y as f32, n.z as f32, n.dot(o) as f32]),
             cap: t.section_cap.to_normalized_gamma_f32(),
             view_proj: proj.vp.to_f32(),
             back: proj.cam.back().to_f32(),

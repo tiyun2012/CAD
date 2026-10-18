@@ -396,7 +396,7 @@ pub fn scene_with_palette(
     sampler: impl FnMut(&Sketch, usize, &Plane) -> Vec<Vec<Vec3>>,
     p: &Palette,
 ) -> Scene {
-    build_scene(s, cam, section, Guides::default(), sampler, p)
+    scene_with_sections(s, cam, section, section.filter(|_| section == s.section).and(s.section_second), Guides::default(), sampler, p)
 }
 
 /// [`scene_with_palette`] with the ground grid and the origin's axes shown or left out.
@@ -408,13 +408,16 @@ pub fn scene_with_palette_and_guides(
     p: &Palette,
     guides: Guides,
 ) -> Scene {
-    build_scene(s, cam, section, guides, sampler, p)
+    scene_with_sections(s, cam, section, section.filter(|_| section == s.section).and(s.section_second), guides, sampler, p)
 }
 
-fn build_scene(
+/// A scene with an explicit half or quarter section, including preview cut outlines.
+#[allow(clippy::too_many_arguments)]
+pub fn scene_with_sections(
     s: &Session,
     cam: &Camera,
     section: Option<(Vec3, Vec3)>,
+    second: Option<(Vec3, Vec3)>,
     guides: Guides,
     mut sampler: impl FnMut(&Sketch, usize, &Plane) -> Vec<Vec<Vec3>>,
     p: &Palette,
@@ -424,6 +427,7 @@ fn build_scene(
     let mut sc = Scene {
         background: Some(p.background),
         clip: section.map(|(o, n)| (n, n.dot(o))),
+        clip_second: section.and(second).map(|(o, n)| (n, n.dot(o))),
         cap: Some(p.cap),
         analysis: s.analysis.map(|a| SceneAnalysis { mode: a.mode(), colors: p.analysis }),
         ..Default::default()
@@ -487,9 +491,14 @@ fn build_scene(
             sc.lines.push(SceneLine { points: e.clone(), color: p.edge, width: 1.2, on_top: false });
         }
         // The outline of the body where the section cuts it.
-        if let Some((o, n)) = section {
+        let second = sc.clip_second.map(|(n, d)| (n * d, n));
+        for (plane, other) in [(section, second), (second, section)] {
+            let Some((o, n)) = plane else { continue };
             for (a, b) in section_segments(&mesh, o, n) {
-                sc.lines.push(SceneLine { points: vec![a, b], color: p.edge, width: 1.6, on_top: false });
+                let clip = other.map(|(o, n)| (-n, -n.dot(o)));
+                for (a, b) in solidcraft_render::section_segments(a, b, clip, None) {
+                    sc.lines.push(SceneLine { points: vec![a, b], color: p.edge, width: 1.6, on_top: false });
+                }
             }
         }
     }
