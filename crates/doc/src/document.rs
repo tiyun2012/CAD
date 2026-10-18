@@ -517,6 +517,30 @@ impl<'de> Deserialize<'de> for FlangeEdge {
     }
 }
 
+/// How big a construction plane is drawn (display only; the plane itself is infinite).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaneSize {
+    #[default]
+    Default,
+    /// Three times the default.
+    Large,
+}
+
+impl PlaneSize {
+    pub fn is_default(&self) -> bool {
+        *self == PlaneSize::Default
+    }
+
+    /// The factor on the default drawn half-size.
+    pub fn scale(self) -> f64 {
+        match self {
+            PlaneSize::Default => 1.0,
+            PlaneSize::Large => 3.0,
+        }
+    }
+}
+
 /// Feature definitions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, solidcraft_derive::Walk)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -797,6 +821,9 @@ pub enum FeatureKind {
     /// A construction plane (sketch placement, split tool).
     ConstructionPlane {
         plane: PlaneRef,
+        /// How big the plane is drawn.
+        #[serde(default, skip_serializing_if = "PlaneSize::is_default")]
+        size: PlaneSize,
     },
     /// Split a body into the parts on either side of a plane, or of a face of a body (the face
     /// through `point`, its surface extended) when `tool` is set.
@@ -3163,7 +3190,7 @@ impl Document {
                     return Ok(*pl);
                 }
                 match self.find_feature(name).map(|f| &f.kind) {
-                    Some(FeatureKind::ConstructionPlane { plane }) => self.resolve_plane_in(vals, plane, depth + 1, st),
+                    Some(FeatureKind::ConstructionPlane { plane, .. }) => self.resolve_plane_in(vals, plane, depth + 1, st),
                     _ => Err(DocError::Unknown(format!("construction plane `{name}`"))),
                 }
             }
