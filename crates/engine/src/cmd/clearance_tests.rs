@@ -251,3 +251,43 @@ fn a_small_gap_past_a_corner_is_not_contact() {
         assert!((f(&r["nearest"][a][0]["distance_mm"]) - want).abs() < 1e-9, "{a} {b}: {r}");
     }
 }
+
+/// #2283: a knuckle (Ø6, z 3.7 to 8.3, with a 150 mm arm) turning between two frame bands (Ø6,
+/// z -1.5 to 3.5 and 8.5 to 13.5) on a shared axis is 0.2 mm from them at every angle. Its axis
+/// tilted 1.5e-6 rad (as a STEP round trip leaves it), the band's rim lies on the knuckle's
+/// cylinder extended past its end, and a point there was taken for a point of the knuckle at
+/// some angles: contact (0) at a point off the body.
+#[test]
+fn a_hinge_gap_is_measured_on_the_trimmed_faces_at_every_angle() {
+    let mut s = Session::default();
+    let part = |s: &mut Session, cmd: &str, mut p: Value, name: &str, join: bool| {
+        p["body_name"] = json!(name);
+        p["operation"] = json!(if join { "join" } else { "new" });
+        if join {
+            p["targets"] = json!([name]);
+        }
+        run(s, cmd, p);
+    };
+    part(&mut s, "solid.cylinder", json!({"radius": 3, "height": 5, "base": [0, 0, -1.5]}), "Frame", false);
+    part(&mut s, "solid.cylinder", json!({"radius": 3, "height": 5, "base": [0, 0, 8.5]}), "Frame", true);
+    for z in [-1.5, 8.5] {
+        part(&mut s, "solid.box", json!({"length": 137.5, "width": 4, "height": 5, "corner": [-140, -2, z]}), "Frame", true);
+    }
+    part(&mut s, "solid.box", json!({"length": 5, "width": 4, "height": 15, "corner": [-145, -2, -1.5]}), "Frame", true);
+    part(&mut s, "solid.cylinder", json!({"radius": 3, "height": 4.6, "base": [0, 0, 3.7]}), "Temple", false);
+    part(&mut s, "solid.box", json!({"length": 150, "width": 2, "height": 4.6, "corner": [0, -1, 3.7]}), "Temple", true);
+    run(&mut s, "solid.move", json!({"bodies": ["Temple"], "axis": [1, 0, 0], "angle": "1.5e-6 rad"}));
+    run(&mut s, "solid.move", json!({"bodies": ["Temple"], "axis": [0, 0, 1], "angle": "29 deg"}));
+    for deg in 30..=80 {
+        run(&mut s, "solid.move", json!({"bodies": ["Temple"], "axis": [0, 0, 1], "angle": "1 deg"}));
+        let r = run(&mut s, "inspect.clearance", json!({"bodies": ["Temple"], "against": ["Frame"], "clearance": 0.5, "nearest": 1}));
+        let near = &r["near"][0];
+        assert!((f(&near["distance_mm"]) - 0.2).abs() < 1e-4, "{deg}°: {r}");
+        assert!((f(&r["nearest"]["Temple"][0]["distance_mm"]) - 0.2).abs() < 1e-4, "{deg}°: {r}");
+        // The witness points lie on the bodies: the frame's at a band end, the knuckle's at one
+        // of its ends.
+        let (from, to) = (f(&near["from"][2]), f(&near["to"][2]));
+        assert!([3.5, 8.5].iter().any(|z| (from - z).abs() < 1e-4), "{deg}°: the frame's point {from} is at a band end: {r}");
+        assert!([3.7, 8.3].iter().any(|z| (to - z).abs() < 1e-4), "{deg}°: the knuckle's point {to} is at a knuckle end: {r}");
+    }
+}

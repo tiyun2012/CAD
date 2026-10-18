@@ -50,6 +50,9 @@ pub struct DistanceShape<'a> {
 const MAX_FACE_PAIRS: usize = 24;
 /// Most projection rounds for one pair of features.
 const MAX_ROUNDS: usize = 400;
+/// A point less than this fraction of its distance from an edge off the line through it is
+/// straight along the edge (see [`DistanceShape::on_face`]).
+const ALONG: f64 = 1e-3;
 
 impl<'a> DistanceShape<'a> {
     /// `mesh` is `body`'s mesh, within `chord` (mm) of its faces.
@@ -149,9 +152,11 @@ impl<'a> DistanceShape<'a> {
                 continue;
             }
             // `p` straight along the edge (past its end, on the line through it) says nothing
-            // about which side it is on: another edge meeting there decides.
+            // about which side it is on: another edge meeting there decides. Straight along is
+            // relative to how far `p` is: past the end, what is left across the edge is the
+            // edge's own tilt and rounding, and its side is chance (#2283).
             let off = across(p);
-            if off.len() <= tiny {
+            if off.len() <= tiny.max(ALONG * at.dist(p)) {
                 continue;
             }
             decided = true;
