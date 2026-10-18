@@ -257,6 +257,13 @@ fn combs(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
     });
 }
 
+/// The point argument for a crossing ("x:[\"<curve>\",\"<curve>\"]:x,y"), which the commands turn
+/// into a point on both curves.
+pub fn crossing_arg(sk: &solidcraft_engine::sketch::Sketch, c: &solidcraft_engine::Crossing) -> Option<String> {
+    let ids = [sk.curves.get(c.a)?.id.clone(), sk.curves.get(c.b)?.id.clone()];
+    Some(format!("x:{}:{},{}", serde_json::to_string(&ids).ok()?, c.at.x, c.at.y))
+}
+
 /// Snap a cursor point on the sketch plane to what Fusion infers while drawing: a line's
 /// midpoint, or alignment (horizontal/vertical) with the previous point of the tool. None:
 /// nothing near, use the grid.
@@ -278,6 +285,13 @@ pub fn refine_snap(
             SNAP.with(|s| *s.borrow_mut() = Some(("Pt", plane.to_local(point))));
             return Some((plane.to_local(point), Some(format!("vertex:{},{},{}", point.x, point.y, point.z))));
         }
+    }
+    // Where two curves cross: the point is held on both (beats Mid and the other inferences).
+    if let Some(c) = solidcraft_engine::crossing_near(sk, lp, tol, |_| true)
+        && let Some(arg) = crossing_arg(sk, &c)
+    {
+        SNAP.with(|s| *s.borrow_mut() = Some(("X", c.at)));
+        return Some((c.at, Some(arg)));
     }
     let mut best: Option<(f64, &'static str, Vec2)> = None;
     let mut mid_of: Option<String> = None;
