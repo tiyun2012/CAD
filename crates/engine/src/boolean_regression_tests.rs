@@ -902,3 +902,31 @@ fn combine_of_a_piece_a_cut_used_to_split_off_takes_the_body_it_is_part_of() {
         assert!(r.is_err(), "{target} {operation} {tools}: {r:?}");
     }
 }
+
+/// A triangular prism and a thin slab sharing their bottom plane, the prism's edge in that plane
+/// lying in the slab's end face, the slab's corners rounded nearly to half its width (so its flat
+/// end is narrower than the prism).
+#[test]
+fn prism_edge_in_a_round_cornered_slab_end_face_joins() {
+    for r in [4.5, 4.9] {
+        let mut s = Session::default();
+        let mut run = |c: &str, p: Value| s.execute(c, &p).unwrap();
+        run("sketch.create", json!({"plane": {"origin": [-45.6, 0, 0], "x_dir": [0, 1, 0], "y_dir": [0, 0, 1]}}));
+        run("sketch.line", json!({"points": [[-63, 0], [-3, 0], [-63, 60]], "closed": true}));
+        run("sketch.finish", json!({}));
+        run("solid.extrude", json!({"distance": 1.2, "operation": "new", "body_name": "Prism"}));
+        run("sketch.create", json!({"plane": "XY"}));
+        run("sketch.rectangle.rounded", json!({"p0": [-50, -67], "p1": [-40, -3], "radius": r}));
+        run("sketch.finish", json!({}));
+        run("solid.extrude", json!({"distance": 0.4, "operation": "new", "body_name": "Slab"}));
+        let (prism, slab) = (volume(&s, "Prism"), volume(&s, "Slab"));
+        s.execute("solid.combine", &json!({"target": "Prism", "tools": ["Slab"], "operation": "join"})).unwrap();
+        let join = s.model.results.last().unwrap();
+        assert_eq!(join.error.as_deref(), None, "r {r}");
+        // The prism inside the slab: 1.2 wide, 0.4 high and 60 long, less the 0.4 x 0.4 triangle the
+        // sloped face leaves empty at the slab's end.
+        let shared = 1.2 * 0.4 * 60.0 - 1.2 * 0.4 * 0.4 / 2.0;
+        let got = volume(&s, "Prism");
+        assert!((got - (prism + slab - shared)).abs() < 1e-3 * got, "r {r}: {got} vs {}", prism + slab - shared);
+    }
+}
