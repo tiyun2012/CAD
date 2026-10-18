@@ -63,7 +63,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("surface.blend", "Blend Surface", blend)
         .at("SURFACE", "CREATE")
         .icon("surface_blend")
-        .params("from, to: {body, edges: [[x,y,z]]} (points on the edges of one chain of each body: two picks on the same edge is that one edge, more chain up); continuity?: [g0|g1|g2|g3, g0|g1|g2|g3] (each end, default g1: how much of the surface at the picked edges the blend repeats — the tangent plane, the curvature, or how that curvature changes); bulge?: [number, number] (default 0: how full each end leaves, -0.9 flattest to 3 fullest); align?: [[x,y,z], [x,y,z]] (a point each end leaves towards, when the faces at the picks do not say); stitch?: bool (sew the blend onto its two bodies where the boundaries meet, replacing them); name?, body_name?"),
+        .params("from, to: {body, edges: [[x,y,z]]} (points on the edges of one chain of each body: two picks on the same edge is that one edge, more chain up); continuity?: [g0|g1|g2|g3, g0|g1|g2|g3] (each end, default g1: how much of the surface at the picked edges the blend repeats — the tangent plane, the curvature, or how that curvature changes); bulge?: [number, number] (default 0: how full each end leaves, -0.9 flattest to 3 fullest); align?: [[x,y,z], [x,y,z]] (a point each end leaves towards, when the faces at the picks do not say); seam?: [[x,y,z], [x,y,z]] (a point on each chain its stations start from: two closed chains otherwise pair the way that keeps the blend from twisting; an open chain starts at the end nearer its point; a closed chain blends only to a closed chain); stitch?: bool (sew the blend onto its two bodies where the boundaries meet, replacing them); name?, body_name?"),
     CommandSpec::new("surface.untrim", "Untrim", untrim)
         .at("SURFACE", "MODIFY")
         .icon("surface_untrim")
@@ -247,8 +247,18 @@ fn blend(s: &mut Session, p: &Value) -> Result<Value> {
             Some([Position(point(list.first())?), Position(point(list.get(1))?)])
         }
     };
+    let seam = match p.get("seam") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let list = v.as_array().filter(|a| a.len() == 2).ok_or_else(|| bad(cmd, "`seam` must be two points, one on each chain"))?;
+            let point = |x: Option<&Value>| -> Result<solidcraft_geom::Vec3> {
+                x.and_then(vec3).ok_or_else(|| bad(cmd, "each `seam` entry must be a point [x,y,z]"))
+            };
+            Some([Position(point(list.first())?), Position(point(list.get(1))?)])
+        }
+    };
     let stitch = bool_(p, "stitch").unwrap_or(false);
-    add_feature(s, p, FeatureKind::SurfaceBlend { from, to, continuity, bulge, align, stitch })
+    add_feature(s, p, FeatureKind::SurfaceBlend { from, to, continuity, bulge, align, seam, stitch })
 }
 
 fn surface_extrude(s: &mut Session, p: &Value) -> Result<Value> {
