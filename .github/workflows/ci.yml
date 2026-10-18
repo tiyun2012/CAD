@@ -30,7 +30,10 @@
 name: CI
 
 on:
+  # Draft pull requests run no CI (see `changes`, `checks` and `ci`): it starts when the PR is
+  # marked ready for review, and on every push after that.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   # The merge queue: each queued group runs the full suite before it lands on main.
   merge_group:
   push:
@@ -72,6 +75,8 @@ jobs:
 
   changes:
     name: Select checks
+    # Not on a draft: every other check needs this one, so they skip too.
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     # Trusted runs (see the top of this file) use the self-hosted runners.
     runs-on: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'self-hosted-light' || 'ubuntu-24.04' }}
     permissions:
@@ -146,6 +151,8 @@ jobs:
                 .github/workflows/ci.yml) native=true ;;
                 *.rs|Cargo.toml|Cargo.lock|*/Cargo.toml|.cargo/*|rust-toolchain*) native=true ;;
                 docs/*|*.md|.github/*|packaging/*|LICENSE*|NOTICE|THIRD-PARTY-LICENSES.txt) ;;
+                # The GitHub bots' scripts: no Rust, tested in this job (Claim and triage bot tests).
+                scripts/claim/*|scripts/triage/*) ;;
                 *) native=true ;;
               esac
             done < "$RUNNER_TEMP/ci-paths"
@@ -188,6 +195,7 @@ jobs:
 
   checks:
     name: Format and repository checks
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'self-hosted-fast' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
@@ -620,7 +628,7 @@ jobs:
   # Preserve the existing check name for branch protection, including docs-only PRs.
   ci:
     needs: [changes, checks, clippy, build-tests, tests, doc-tests, oracle, windows-fxc, windows-startup]
-    if: always()
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-light' || 'ubuntu-24.04' }}
     steps:
       - name: Verify required checks
