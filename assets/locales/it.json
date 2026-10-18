@@ -1306,6 +1306,7 @@
   "ui.pan_zoom_orbit": "Panoramica, zoom, orbita",
   "ui.parallel": "Parallelo",
   "ui.parameters": "Parametri",
+  "ui.part_size_shared": "Ricostruisce la parte, sostituendo le eventuali lavorazioni aggiunte. Si aggiornano tutte le occorrenze del componente.",
   "ui.paste": "Incolla",
   "ui.path": "Percorso",
   "ui.pattern_on_path": "Ripetizione su percorso",

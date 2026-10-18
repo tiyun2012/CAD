@@ -1357,6 +1357,7 @@
   "ui.pan_zoom_orbit": "Pan, zoom, orbit",
   "ui.parallel": "Parallel",
   "ui.parameters": "Parameters",
+  "ui.part_size_shared": "Rebuilds the part, replacing any added features. All occurrences of this component update.",
   "ui.paste": "Paste",
   "ui.path": "Path",
   "ui.pattern_on_path": "Pattern on Path",

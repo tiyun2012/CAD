@@ -30,6 +30,7 @@ pub mod dialogs_coupling;
 pub mod dialogs_library;
 pub mod dialogs_motion;
 pub mod dialogs_move;
+pub mod dialogs_part_size;
 pub mod dialogs_parts;
 pub mod dialogs_plastic;
 pub mod dialogs_save_mesh;

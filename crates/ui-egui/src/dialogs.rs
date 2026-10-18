@@ -279,6 +279,7 @@ pub enum Kind {
     Motion(crate::dialogs_motion::Mo),
     /// Insert Part from the standard parts library (`dialogs_parts`).
     Part(crate::dialogs_parts::Pt),
+    PartSize(crate::dialogs_part_size::Resize),
     /// Edit Text: a sketch text's content and placement (`sketch_text`).
     Text(Box<crate::sketch_text::Tx>),
     TextMove(crate::sketch_text_move::TextMove),
@@ -639,6 +640,7 @@ impl Dialog {
                     .or_else(|| crate::dialogs_appearance::start(app, id))
                     .or_else(|| crate::dialogs_motion::start(app, id))
                     .or_else(|| crate::dialogs_parts::start(app, id))
+                    .or_else(|| crate::dialogs_part_size::start(app, id))
                     .or_else(|| crate::sketch_text::start(app, id))
                     .or_else(|| crate::sketch_text_move::start(app, id))
                     .or_else(|| crate::sketch_modify_ui::start(app, id))?;
@@ -777,7 +779,7 @@ impl Dialog {
             Kind::Surface(_) => return true,
             Kind::SketchModify(k) => return k.previews(),
             Kind::Plastic(k) => return k.previews(),
-            Kind::Part(_) => return true,
+            Kind::Part(_) | Kind::PartSize(_) => return true,
             _ => {}
         }
         matches!(
@@ -1455,6 +1457,7 @@ fn title(k: &Kind) -> &'static str {
         Kind::Appearance(_) => "APPEARANCE",
         Kind::Motion(k) => k.title(),
         Kind::Part(_) => "INSERT PART",
+        Kind::PartSize(_) => "Change Part Size",
         Kind::Text(_) => "EDIT TEXT",
         Kind::TextMove(_) => "MOVE/COPY TEXT",
         Kind::SketchModify(k) => k.title(),
@@ -3032,6 +3035,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                     Kind::Appearance(k) => enter |= crate::dialogs_appearance::rows(app, ui, k, &mut d.inputs),
                     Kind::Motion(k) => enter |= crate::dialogs_motion::rows(app, ui, k, &mut d.inputs),
                     Kind::Part(k) => enter |= crate::dialogs_parts::rows(app, ui, k, &d.inputs),
+                    Kind::PartSize(k) => enter |= crate::dialogs_part_size::rows(app, ui, k),
                     Kind::Text(k) => enter |= crate::sketch_text::rows(ui, k, &mut d.inputs, &mut d.active),
                     Kind::TextMove(k) => enter |= crate::sketch_text_move::rows(ui, k),
                     Kind::ConfirmDelete { with, fail, .. } => {
@@ -4347,6 +4351,7 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
         Kind::Appearance(k) => return Ok(crate::dialogs_appearance::commands(k, &d.inputs)),
         Kind::Motion(k) => return crate::dialogs_motion::commands(app, k, &d.inputs),
         Kind::Part(k) => return crate::dialogs_parts::commands(app, k, &d.inputs),
+        Kind::PartSize(k) => return crate::dialogs_part_size::commands(app, k),
         Kind::Text(k) => return crate::sketch_text::commands(app, k),
         Kind::TextMove(k) => return crate::sketch_text_move::commands(app, k),
     };

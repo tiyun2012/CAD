@@ -1357,6 +1357,7 @@
   "ui.pan_zoom_orbit": "平移、缩放、环绕",
   "ui.parallel": "平行",
   "ui.parameters": "参数",
+  "ui.part_size_shared": "重新生成零件并替换额外添加的特征。此零部件的所有实例都会更新。",
   "ui.paste": "粘贴",
   "ui.path": "路径",
   "ui.pattern_on_path": "路径阵列",
