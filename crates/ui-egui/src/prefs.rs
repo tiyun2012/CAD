@@ -251,6 +251,10 @@ pub enum OrbitAround {
     Cursor,
 }
 
+/// The browser sidebar's first width, and the width [`Prefs::default`] restores; the panel
+/// itself clamps what the user drags to its own range.
+pub const DEFAULT_BROWSER_WIDTH: f32 = 250.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
@@ -318,6 +322,12 @@ pub struct Prefs {
     pub timeline_left_height: f32,
     /// Whether the browser below the left feature history is collapsed.
     pub timeline_left_browser_collapsed: bool,
+    /// Width of the left sidebar holding the browser (and the feature history above it), which
+    /// the user drags wider or narrower at its right edge.
+    pub browser_width: f32,
+    /// Draw the parts browser on a translucent card over the 3D view instead of a column of its
+    /// own, so the workspace keeps the whole window width.
+    pub browser_float: bool,
     /// The wheel zooms toward the point under the cursor (else toward the view's centre).
     pub zoom_to_cursor: bool,
     /// Spread discrete wheel input across frames (off: apply each event immediately).
@@ -440,6 +450,8 @@ impl Default for Prefs {
             timeline_left: false,
             timeline_left_height: 360.0,
             timeline_left_browser_collapsed: false,
+            browser_width: DEFAULT_BROWSER_WIDTH,
+            browser_float: false,
             zoom_to_cursor: true,
             smooth_wheel_zoom: true,
             trackpad_pan: true,
@@ -695,6 +707,8 @@ fn defaults(app: &mut SolveApp, page: usize) {
             p.timeline_left = d.timeline_left;
             p.timeline_left_height = d.timeline_left_height;
             p.timeline_left_browser_collapsed = d.timeline_left_browser_collapsed;
+            p.browser_width = d.browser_width;
+            p.browser_float = d.browser_float;
             p.default_units = d.default_units;
             p.length_decimals = d.length_decimals;
             p.angle_decimals = d.angle_decimals;
@@ -1219,6 +1233,11 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
             });
             ui.end_row();
             note(ui, app.tr("ui.timeline_left_note"));
+            ui.label(app.tr_label("Parts browser"));
+            let float_label = app.tr_label("Float it over the workspace").to_string();
+            ui.checkbox(&mut app.preferences.browser_float, float_label);
+            ui.end_row();
+            note(ui, app.tr_label("The tree draws on a translucent card over the 3D view instead of a column of its own."));
             ui.label(app.tr("ui.units_of_new_designs"));
             egui::ComboBox::from_id_salt("pref_units").selected_text(app.preferences.default_units.clone()).show_ui(ui, |ui| {
                 for u in UNITS {

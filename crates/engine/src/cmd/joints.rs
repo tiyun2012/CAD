@@ -17,10 +17,10 @@ use crate::{EngineError, Result, Session};
 
 pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("joint.origin", "Joint Origin", joint_origin).at("SOLID", "CREATE").icon("joint_origin").params(
-        "name?, occurrence?: id|name (default: from the pick, or the named face's component), face: [x,y,z] | \"<name>\" (centre of a planar face) | circle: [x,y,z] | \"<name>\" (centre of a round end: a point on its wall or rim, the end's centre, or the round face's name as model.faces lists it) | point: [x,y,z], z?: [x,y,z]; body?: the named face's body; end?: \"<name>\" (a circle's end: the face across its rim there; default the end nearer the pick); x?: [x,y,z] (a direction, world) | \"<face name>\" | {face: [x,y,z]} (the frame's x: a direction, a plane's normal, or the way to another hole's axis; keeps a round origin's turn). Faces are kept by name: the origin follows its face, and a circle its end, when the design changes",
+        "name?, occurrence?: id|name (default: from the pick, or the named face's component), face: [x,y,z] | \"<name>\" (centre of a planar face) | circle: [x,y,z] | \"<name>\" (centre of a round end: a point on its wall or rim, the end's centre, or the round face's name as model.faces lists it) | edge: [x,y,z] (a point on an edge of a planar face: the edge's middle, z out of the face, y into it; on?: [x,y,z] a point on the face (default: the larger planar face beside the edge); corner?: [x,y,z] near one end: the corner there, x and y along its two edges into the face; found again by name, so it follows the face as it changes size) | point: [x,y,z], z?: [x,y,z]; body?: the named face's body; end?: \"<name>\" (a circle's end: the face across its rim there; default the end nearer the pick); x?: [x,y,z] (a direction, world) | \"<face name>\" | {face: [x,y,z]} (the frame's x: a direction, a plane's normal, or the way to another hole's axis; keeps a round origin's turn). Faces are kept by name: the origin follows its face, and a circle its end, when the design changes",
     ),
     CommandSpec::new("joint.create", "Joint", joint).at("SOLID", "ASSEMBLE").icon("joint").key("J").params(
-        "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball; a, b: joint origins ({occurrence, face|circle|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
+        "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball; a, b: joint origins ({occurrence, face|circle|edge|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
          values?: [angles in deg or expressions, distances]; limits?: [[min, max] | null…]; flip?: bool (default false: the origins are mated, \
          b's z against a's as two faces meet; true: b's z along a's, so two origins given at one point with the same z stay as they are); \
          offset?; angle?; name?; quiet?: bool (leave out dof and fixed)",
@@ -279,11 +279,11 @@ fn origin_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<JointOrigin
     if let Some((what, name)) = ["face", "circle"].iter().find_map(|k| v.get(*k).and_then(Value::as_str).map(|n| (*k, n))) {
         return origin_by_name(s, v, what, name, cmd);
     }
-    let pick = ["face", "circle", "point"].iter().find_map(|k| v.get(*k).and_then(vec3).map(|p| (*k, p)));
+    let pick = ["face", "circle", "edge", "point"].iter().find_map(|k| v.get(*k).and_then(vec3).map(|p| (*k, p)));
     let (what, world) = match (pick, v.get("frame")) {
         (Some(x), _) => x,
         (None, Some(f)) => ("frame", f.get("origin").and_then(vec3).ok_or_else(|| bad(cmd, "`frame` needs origin and z"))?),
-        _ => return Err(bad(cmd, "a joint origin needs face, circle, point or frame [x, y, z], or a face's name")),
+        _ => return Err(bad(cmd, "a joint origin needs face, circle, edge, point or frame [x, y, z], or a face's name")),
     };
     let occurrence = match v.get("occurrence") {
         Some(o) => occurrence_id(s, Some(o), cmd)?,
@@ -303,6 +303,10 @@ fn origin_param(s: &Session, v: Option<&Value>, cmd: &str) -> Result<JointOrigin
             let face = joints::face_name_at(&s.doc, &st, component, pick, what == "circle");
             let x = x_param(s, v, component, &inv, cmd)?;
             if what == "face" { Snap::FaceCenter { pick, face, x } } else { Snap::CircleCenter { pick, face, end: None, x } }
+        }
+        "edge" => {
+            let (on, corner) = (v.get("on").and_then(vec3).map(local), v.get("corner").and_then(vec3).map(local));
+            joints::edge_snap(&s.doc, &st, component, local(world), on, corner).map_err(|e| bad(cmd, e.to_string()))?
         }
         "point" => Snap::Point { point: local(world), z: v.get("z").and_then(vec3).map(local_dir) },
         _ => {
@@ -373,8 +377,11 @@ fn settle(s: &Session, mut o: JointOrigin, v: &Value, cmd: &str) -> Result<Joint
             return Err(bad(cmd, format!("the round face doesn't end on face `{want}` (its ends lie on: {})", names.join(", "))));
         }
     }
-    joints::resolve_origin(&s.doc, &st, &o).map_err(|e| bad(cmd, e.to_string()))?;
+    let m = joints::resolve_origin(&s.doc, &st, &o).map_err(|e| bad(cmd, e.to_string()))?;
     joints::pin_end(&s.doc, &st, &mut o.snap);
+    // A face or circle given no `x` keeps the x it has now, so its frame doesn't turn as the face
+    // tilts.
+    o.snap = o.snap.with_frame_x(Vec3::new(m[0][0], m[0][1], m[0][2]));
     Ok(o)
 }
 
@@ -1317,8 +1324,14 @@ pub(crate) fn overlapping_pairs(boxes: &[Aabb3], limit: usize) -> (Vec<(usize, u
 }
 
 #[cfg(test)]
+#[path = "joint_edge_tests.rs"]
+mod edge_tests;
+#[cfg(test)]
 #[path = "joints_face_tests.rs"]
 mod face_tests;
+#[cfg(test)]
+#[path = "joint_frames_tests.rs"]
+mod frames_tests;
 #[cfg(test)]
 #[path = "joints_reach_tests.rs"]
 mod reach_tests;

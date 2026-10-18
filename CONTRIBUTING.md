@@ -148,6 +148,8 @@ the most complete description of the house style.
 A geometry change that changes the robustness goldens re-records them in the same pull request:
 `ROBUSTNESS_GOLDENS_BLESS="why it changed" cargo test --profile ci -p solidcraft-engine --lib robustness_goldens::`
 (see [docs/robustness.md](docs/robustness.md)); CI runs every seed on pull requests that touch geometry.
+[docs/mutation-testing.md](docs/mutation-testing.md) shows how to find kernel behaviour these
+black-box suites miss.
 
 **UI scenarios** drive the real app headless: start a tool, click a plane or a sketch point,
 press keys, then assert on the result.

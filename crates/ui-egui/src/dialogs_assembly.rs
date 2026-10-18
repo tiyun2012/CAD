@@ -701,7 +701,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Asm, inputs: &mut [Se
             ui.end_row();
             row_label(ui, "");
             let stale = result.is_some() && *of != picked;
-            if ui.button(if stale { "Compute again" } else { "Compute" }).clicked() {
+            if ui.button(crate::i18n::tr(if stale { "dialog.compute_again" } else { "dialog.compute" })).clicked() {
                 let (r, o) = interference(app, &picked, clearance);
                 *result = Some(r);
                 *overlaps = o;
@@ -729,7 +729,7 @@ fn interference(app: &mut SolveApp, picked: &[Sel], clearance: &str) -> (Value, 
     let (scale, _) = crate::prefs::unit_scale(&app.session.doc.units);
     let clearance = match crate::prefs::parse_length_mm(clearance, scale) {
         Some(v) if v >= 0.0 => v,
-        _ => return (json!({ "error": "the clearance must be a length of 0 or more" }), Vec::new()),
+        _ => return (json!({ "error": crate::i18n::tr("dialog.clearance_invalid") }), Vec::new()),
     };
     let mut p = json!({ "clearance": clearance, "nearest": 1 });
     if !names.is_empty() {
@@ -762,7 +762,7 @@ fn interference_rows(app: &SolveApp, ui: &mut egui::Ui, r: &Value) {
     }
     let hits = r["overlaps"].as_array().cloned().unwrap_or_default();
     row_label(ui, "Checked");
-    ui.label(format!("{} bodies", r["bodies"].as_u64().unwrap_or(0)));
+    ui.label(crate::i18n::format("dialog.bodies_count", &[("count", &r["bodies"].as_u64().unwrap_or(0).to_string())]));
     ui.end_row();
     let unchecked = r["unchecked"].as_array().cloned().unwrap_or_default();
     let near = r["near"].as_array().cloned().unwrap_or_default();
@@ -812,7 +812,7 @@ fn interference_rows(app: &SolveApp, ui: &mut egui::Ui, r: &Value) {
     // Pairs the check could not work out: not clear, not known to interfere.
     for u in unchecked {
         row_label(ui, &format!("{} · {}", u["a"].as_str().unwrap_or(""), u["b"].as_str().unwrap_or("")));
-        ui.label(RichText::new("could not be checked").color(t.warning)).on_hover_text(u["reason"].as_str().unwrap_or(""));
+        ui.label(RichText::new(crate::i18n::tr("dialog.could_not_be_checked")).color(t.warning)).on_hover_text(u["reason"].as_str().unwrap_or(""));
         ui.end_row();
     }
 }

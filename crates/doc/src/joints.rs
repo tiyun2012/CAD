@@ -62,6 +62,18 @@ pub enum Snap {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         x: Option<XRef>,
     },
+    /// A point on an edge of a planar face: the edge's middle, or the corner where it meets the
+    /// edge `corner` names (`joints_edge.rs`). `edge` and `face` are the persistent names of the
+    /// edge and the face (found first); `pick` is a point on the edge as it was picked.
+    Edge {
+        pick: Vec3,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edge: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        face: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corner: Option<String>,
+    },
     /// A point, z along `z` (default +Z).
     Point {
         point: Vec3,
@@ -88,7 +100,8 @@ pub enum XRef {
 }
 
 impl Snap {
-    /// The persistent face names the snap refers to (its face, its end's, its x reference's).
+    /// The persistent face and edge names the snap refers to (its face, its end's, its x reference's;
+    /// an edge origin's edge, face and corner edge).
     pub fn face_names(&self) -> Vec<&String> {
         let mut out = Vec::new();
         if let Snap::FaceCenter { face, x, .. } | Snap::CircleCenter { face, x, .. } = self {
@@ -99,6 +112,9 @@ impl Snap {
         }
         if let Snap::CircleCenter { end: Some(end), .. } = self {
             out.push(end);
+        }
+        if let Snap::Edge { edge, face, corner, .. } = self {
+            out.extend(edge.iter().chain(face.iter()).chain(corner.iter()));
         }
         out
     }
@@ -120,9 +136,31 @@ impl Snap {
                     out.push(face);
                 }
             }
+            Snap::Edge { edge, face, corner, .. } => out.extend(edge.iter_mut().chain(face.iter_mut()).chain(corner.iter_mut())),
             _ => {}
         }
         out
+    }
+
+    /// The direction a face or circle snap keeps as its frame's x (`XRef::Dir`), in the
+    /// component's coordinates; `None` for a face reference or none.
+    pub fn frame_x(&self) -> Option<Vec3> {
+        match self {
+            Snap::FaceCenter { x: Some(XRef::Dir(d)), .. } | Snap::CircleCenter { x: Some(XRef::Dir(d)), .. } => Some(*d),
+            _ => None,
+        }
+    }
+
+    /// A face or circle snap given no x reference keeps `x` (the frame's x as it is now): each
+    /// solve lays it onto the face, or square to the hole's axis, as the geometry is then, so a
+    /// part on a face that tilts keeps its turn about z. Without it (designs made before) x
+    /// follows from z alone, and turns through a right angle where z crosses 0.9 along the
+    /// component's X. A snap with a reference keeps it.
+    pub fn with_frame_x(mut self, x: Vec3) -> Snap {
+        if let Snap::FaceCenter { x: slot @ None, .. } | Snap::CircleCenter { x: slot @ None, .. } = &mut self {
+            *slot = Some(XRef::Dir(x));
+        }
+        self
     }
 
     /// Whether every point and direction in the snap is finite.
@@ -136,6 +174,7 @@ impl Snap {
             Snap::Frame { origin, z, x } => origin.is_finite() && z.is_finite() && x.is_none_or(|x| x.is_finite()),
             Snap::FaceCenter { pick, x, .. } | Snap::CircleCenter { pick, x, .. } => pick.is_finite() && x_ok(x),
             Snap::Point { point, z } => point.is_finite() && z.is_none_or(|z| z.is_finite()),
+            Snap::Edge { pick, .. } => pick.is_finite(),
         }
     }
 }
@@ -519,6 +558,7 @@ pub fn resolve_origin(doc: &Document, st: &ModelState, o: &JointOrigin) -> Resul
             };
             frame(c, n, face::x_axis(doc, st, x.as_ref(), c)?).ok_or_else(bad)
         }
+        Snap::Edge { .. } => edge::edge_frame(doc, st, component_of(doc, o.occurrence)?, &o.snap),
         Snap::CircleCenter { x, .. } => {
             let r = round_of(doc, st, o)?;
             frame(r.centre, r.z, face::x_axis(doc, st, x.as_ref(), r.centre)?).ok_or_else(bad)
@@ -1547,6 +1587,10 @@ impl Document {
 
 #[path = "joints_cam.rs"]
 pub mod cam;
+
+#[path = "joints_edge.rs"]
+mod edge;
+pub use edge::edge_snap;
 
 #[path = "joints_reach.rs"]
 mod reach;

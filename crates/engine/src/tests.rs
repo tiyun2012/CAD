@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use crate::*;
 
 mod mesh_convert;
+mod taper_arc_corner;
 
 fn run(s: &mut Session, id: &str, p: Value) -> Value {
     match s.execute(id, &p) {

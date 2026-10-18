@@ -1387,7 +1387,9 @@ impl SolveApp {
             timeline::timeline(self, ui);
         }
         palette::palette_bar(self, ui);
-        if self.ui.show_browser {
+        // A floating browser keeps the workspace the whole width: it is drawn over the view below.
+        let browser_float = self.ui.show_browser && self.preferences.browser_float;
+        if self.ui.show_browser && !browser_float {
             if left_timeline {
                 browser::browser_below_timeline(self, ui);
             } else {
@@ -1401,6 +1403,11 @@ impl SolveApp {
         }
         agent_chat::show(self, ui);
         preview::update(self, ui.ctx());
+        if browser_float {
+            // The room the central view is about to take, before it takes it.
+            let viewport = ui.available_rect_before_wrap();
+            browser::floating(self, ui, viewport);
+        }
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             if render_workspace::active(self) {
                 render_workspace::show(self, ui);

@@ -233,3 +233,27 @@ fn paste_new_internal_motion_study_drives_only_the_copied_assembly_and_reopens()
     assert_eq!(reopened.assembly, s.doc.assembly);
     assert!(reopened.assembly.studies.iter().any(|m| m.name == "Travel (copy)" && m.keys[0].joint == copied_joint));
 }
+
+/// An edge origin's edge, face and corner edge are the copy's too.
+#[test]
+fn an_edge_origin_is_copied_onto_the_copys_edges() {
+    let (source, mut destination) = documents();
+    let edge = |e: &str| Some(e.to_string());
+    let mut source = source;
+    source.assembly.origins = vec![NamedOrigin {
+        name: "Corner".into(),
+        origin: JointOrigin {
+            occurrence: 1,
+            snap: Snap::Edge { pick: Vec3::new(1.0, 2.0, 3.0), edge: edge("F1:top|F1:side"), face: edge("F1:top"), corner: edge("F1:top|F10:end") },
+        },
+    }];
+    destination.assembly.origins.clear();
+    clone_assembly(&mut destination, &source, &BTreeMap::from([(1, 101), (2, 102)]), &BTreeMap::from([(1, 11), (10, 110)]), &BTreeMap::new())
+        .unwrap();
+    let copied = destination.assembly.origins.last().map(|o| &o.origin.snap);
+    assert!(
+        matches!(copied, Some(Snap::Edge { edge: Some(e), face: Some(f), corner: Some(c), .. })
+            if e == "F11:top|F11:side" && f == "F11:top" && c == "F11:top|F110:end"),
+        "{copied:?}"
+    );
+}
