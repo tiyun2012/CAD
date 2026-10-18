@@ -3379,7 +3379,7 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| ui.is_enabled() && ui.rect_contains_pointer(rect) && !crate::shell::covered(app, *p));
     let hovered = if orbiting { None } else { hover.and_then(|p| axis_hit(&tips, p)) };
     let painter = ui.painter_at(rect);
-    painter.circle(c, 55.0, t.overlay.gamma_multiply(0.35), Stroke::new(1.0, t.border.gamma_multiply(0.55)));
+    painter.circle(c, 55.0, t.overlay.gamma_multiply(0.35), Stroke::new(1.5, t.border));
     for (i, (name, d, at, depth)) in tips.iter().enumerate() {
         crate::icons::navigation::axis_tip(&painter, c, name, d, *at, *depth, hovered == Some(i), t);
         crate::scenario::publish_handle(&format!("axis_view:{name}"), *at);
@@ -3413,6 +3413,8 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     crate::scenario::publish_rect("axis_view:home", home);
     crate::scenario::publish_handle("axis_view:home", home.center());
     let hr = ui.interact(home, ui.id().with("axis_view_home"), Sense::click());
+    // The home button sits in its own small round chip.
+    painter.circle(home.center(), 12.0, t.overlay.gamma_multiply(if hr.hovered() { 0.9 } else { 0.5 }), Stroke::new(1.0, t.border));
     icons::paint(&painter, home, "home", t.icon, if hr.hovered() { t.accent_soft } else { t.overlay }, t.accent);
     if hr.on_hover_text(crate::i18n::tr_label("Home view")).clicked() {
         app.animate_view("home");

@@ -162,9 +162,9 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     // Keep picking at the original tips; only the artwork moves inward, leaving
     // more breathing room inside the unchanged 55 px compass background.
     let at = c + (at - c) * 0.84;
-    let radius = if positive { 12.0 } else { 6.5 };
+    let radius = if positive { 13.0 } else { 6.5 };
     let direction = (at - c).normalized();
-    painter.line_segment([c, at - direction * radius], Stroke::new(if positive { 3.5 } else { 2.5 }, ink));
+    painter.line_segment([c, at - direction * radius], Stroke::new(3.0, ink));
     if positive {
         painter.circle_filled(at, radius, col);
     }
@@ -174,9 +174,14 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         painter.circle_filled(at, radius, t.accent_soft);
     }
     if positive {
-        painter.text(at, Align2::CENTER_CENTER, name.to_uppercase(), FontId::proportional(12.0), if hovered { ink } else { t.on_accent });
+        // The letters are heavy: egui's regular face gets a small overstrike for weight.
+        let letter = if hovered { ink } else { t.on_accent };
+        let label = name.to_uppercase();
+        for dx in [-0.35, 0.35] {
+            painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(14.0), letter);
+        }
     }
     if !positive || hovered {
-        painter.circle_stroke(at, radius, Stroke::new(2.0, if hovered { t.accent } else { ink }));
+        painter.circle_stroke(at, radius, Stroke::new(2.2, if hovered { t.accent } else { ink }));
     }
 }
