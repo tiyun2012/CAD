@@ -1,6 +1,6 @@
 # UI localization
 
-SolidCraft embeds its translations and works offline. English, Czech, German, Spanish, French, Galician, Italian,
+SolidCraft embeds its translations and works offline. English, Czech, German, English (UK), Spanish, French, Galician, Italian,
 Japanese, Korean, Brazilian Portuguese, Russian, Turkish, Ukrainian and Chinese are currently registered in `crates/ui-egui/src/i18n.rs`. Adding a language requires an
 embedded catalog and one registration there; the preferences selector and validation use the same
 registry.
@@ -30,6 +30,14 @@ The [glossary](book/src/reference/glossary.md) gives one English term for each i
 entry has a note for translators: what the term must not be confused with. Its "Words with more
 than one meaning" table lists the English words that need a separate catalogue entry for each
 meaning (Construction, Flat, Round, Normal, Gap, Clearance).
+
+## English (UK)
+
+`en-GB.json` holds only the English messages whose spelling differs in UK English (Centre,
+Customise, Organisation, Licence, colours, …), in UK spelling; every other message is English's.
+`english_uk_is_english_in_uk_spelling` (in `i18n.rs`) works the catalog out from `en.json` and
+its table of US and UK words, and fails with the exact lines to add when an English message
+with a US spelling is added or changed. A word the table doesn't know yet goes in the table.
 
 ## Coverage
 

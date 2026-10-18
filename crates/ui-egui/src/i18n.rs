@@ -20,6 +20,12 @@ impl Catalog {
         Self { id, name, source, messages: OnceLock::new() }
     }
 
+    /// A regional English (`en-GB`). It holds only the messages it spells differently, so a
+    /// message it doesn't have is English's on purpose, not a missing translation.
+    pub fn is_regional_english(&self) -> bool {
+        self.id.starts_with("en-")
+    }
+
     fn messages(&'static self) -> &'static Messages {
         self.messages.get_or_init(|| match serde_json::from_str(self.source) {
             Ok(messages) => messages,
@@ -34,6 +40,9 @@ impl Catalog {
 static ENGLISH: Catalog = Catalog::new("en", "English", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/en.json")));
 static CZECH: Catalog = Catalog::new("cs", "Čeština", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/cs.json")));
 static GERMAN: Catalog = Catalog::new("de", "Deutsch", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/de.json")));
+/// English in UK spelling: only the messages whose spelling differs; the rest are English's.
+static ENGLISH_UK: Catalog =
+    Catalog::new("en-GB", "English (UK)", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/en-GB.json")));
 static SPANISH: Catalog = Catalog::new("es", "Español (España)", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/es.json")));
 static FRENCH: Catalog = Catalog::new("fr", "Français", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/fr.json")));
 static GALICIAN: Catalog = Catalog::new("gl", "Galego", include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/locales/gl.json")));
@@ -53,6 +62,7 @@ pub const LOCALES: &[&Catalog] = &[
     &ENGLISH,
     &CZECH,
     &GERMAN,
+    &ENGLISH_UK,
     &SPANISH,
     &FRENCH,
     &GALICIAN,
@@ -225,6 +235,165 @@ mod tests {
         let ids: Vec<&str> = LOCALES.iter().map(|c| c.id).collect();
         assert_eq!(ids.first(), Some(&"en"));
         assert!(ids[1..].is_sorted(), "{ids:?}");
+    }
+
+    /// US spellings and their UK forms, as whole lower-case words. English (UK) is English with
+    /// these words in their UK form and nothing else changed.
+    const UK_SPELLINGS: &[(&str, &str)] = &[
+        ("aluminum", "aluminium"),
+        ("analyze", "analyse"),
+        ("analyzed", "analysed"),
+        ("analyzes", "analyses"),
+        ("analyzing", "analysing"),
+        ("behavior", "behaviour"),
+        ("behaviors", "behaviours"),
+        ("canceled", "cancelled"),
+        ("canceling", "cancelling"),
+        ("center", "centre"),
+        ("centered", "centred"),
+        ("centering", "centring"),
+        ("centerline", "centreline"),
+        ("centerlines", "centrelines"),
+        ("centers", "centres"),
+        ("centimeter", "centimetre"),
+        ("centimeters", "centimetres"),
+        ("color", "colour"),
+        ("colored", "coloured"),
+        ("coloring", "colouring"),
+        ("colors", "colours"),
+        ("customization", "customisation"),
+        ("customize", "customise"),
+        ("customized", "customised"),
+        ("customizes", "customises"),
+        ("customizing", "customising"),
+        ("favorite", "favourite"),
+        ("favorites", "favourites"),
+        ("fiber", "fibre"),
+        ("fibers", "fibres"),
+        ("gray", "grey"),
+        ("labeled", "labelled"),
+        ("labeling", "labelling"),
+        ("license", "licence"),
+        ("licenses", "licences"),
+        ("liter", "litre"),
+        ("liters", "litres"),
+        ("maximize", "maximise"),
+        ("maximized", "maximised"),
+        ("millimeter", "millimetre"),
+        ("millimeters", "millimetres"),
+        ("minimize", "minimise"),
+        ("minimized", "minimised"),
+        ("modeled", "modelled"),
+        ("modeler", "modeller"),
+        ("modeling", "modelling"),
+        ("mold", "mould"),
+        ("molded", "moulded"),
+        ("molding", "moulding"),
+        ("molds", "moulds"),
+        ("normalize", "normalise"),
+        ("normalized", "normalised"),
+        ("optimize", "optimise"),
+        ("optimized", "optimised"),
+        ("organization", "organisation"),
+        ("organizations", "organisations"),
+        ("organize", "organise"),
+        ("organized", "organised"),
+        ("recognize", "recognise"),
+        ("recognized", "recognised"),
+        ("synchronize", "synchronise"),
+        ("synchronized", "synchronised"),
+        ("toward", "towards"),
+        ("traveled", "travelled"),
+        ("visualize", "visualise"),
+        ("visualized", "visualised"),
+    ];
+
+    /// One word in its UK form, in the word's own case (`Center` → `Centre`, `CENTER` → `CENTRE`).
+    fn uk_word(word: &str) -> String {
+        let lower = word.to_ascii_lowercase();
+        let Some((_, uk)) = UK_SPELLINGS.iter().find(|(us, _)| *us == lower) else {
+            return word.to_string();
+        };
+        if word.len() > 1 && word.chars().all(|c| c.is_ascii_uppercase()) {
+            uk.to_ascii_uppercase()
+        } else if word.starts_with(|c: char| c.is_ascii_uppercase()) {
+            uk[..1].to_ascii_uppercase() + &uk[1..]
+        } else {
+            uk.to_string()
+        }
+    }
+
+    /// `text` in UK spelling. Placeholders (`{center}`) and code (`` `color` ``) stay as they are.
+    fn in_uk_spelling(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut word = String::new();
+        let mut inside: Option<char> = None;
+        for c in text.chars() {
+            if let Some(end) = inside {
+                out.push(c);
+                if c == end {
+                    inside = None;
+                }
+                continue;
+            }
+            if c.is_ascii_alphabetic() {
+                word.push(c);
+                continue;
+            }
+            out.push_str(&uk_word(&word));
+            word.clear();
+            inside = match c {
+                '{' => Some('}'),
+                '`' => Some('`'),
+                _ => None,
+            };
+            out.push(c);
+        }
+        out + &uk_word(&word)
+    }
+
+    #[test]
+    fn uk_spelling_keeps_case_word_edges_placeholders_and_code() {
+        assert_eq!(in_uk_spelling("Center X"), "Centre X");
+        assert_eq!(in_uk_spelling("CENTER, Centerline; colors."), "CENTRE, Centreline; colours.");
+        assert_eq!(in_uk_spelling("the {center} of `color` is centered"), "the {center} of `color` is centred");
+        // Words that only contain a US word, and verbs whose UK form is the same, don't change.
+        assert_eq!(in_uk_spelling("Licensed under a license; epicenter, Parameters"), "Licensed under a licence; epicenter, Parameters");
+        assert_eq!(in_uk_spelling(""), "");
+    }
+
+    /// English (UK) holds exactly the English messages that UK spelling changes, each in its UK
+    /// form. A new English message with a US spelling, or a changed one, fails here and prints
+    /// the lines to put in `assets/locales/en-GB.json`, so the catalog can't miss a message or
+    /// keep an old text.
+    #[test]
+    fn english_uk_is_english_in_uk_spelling() {
+        let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+        let uk: Messages = serde_json::from_str(ENGLISH_UK.source).unwrap();
+        let want: Messages = english
+            .iter()
+            .filter_map(|(id, text)| {
+                let changed = in_uk_spelling(text);
+                (changed != *text).then(|| (id.clone(), changed))
+            })
+            .collect();
+        let differ = |a: &Messages, b: &Messages| -> Vec<String> {
+            a.iter().filter(|(id, text)| b.get(*id) != Some(*text)).map(|(id, text)| format!("  {id:?}: {text:?},")).collect()
+        };
+        let (add, remove) = (differ(&want, &uk), differ(&uk, &want));
+        assert!(add.is_empty() && remove.is_empty(), "en-GB.json needs:\n{}\nand not:\n{}", add.join("\n"), remove.join("\n"));
+        assert!(!want.is_empty(), "UK spelling changes no English message");
+    }
+
+    #[test]
+    fn english_uk_shows_uk_spelling_and_english_for_the_rest() {
+        let (uk, english) = (Locale::for_language("en-GB"), Locale::for_language("en"));
+        assert_eq!(uk.name(), "English (UK)");
+        assert_eq!(uk.label("Center X"), "Centre X");
+        assert_eq!(uk.label("Customize Toolbar"), "Customise Toolbar");
+        assert_eq!(uk.text("ui.design_properties.organization"), "Organisation");
+        assert_eq!(uk.text("ui.preferences"), english.text("ui.preferences"));
+        assert_eq!(english.label("Center X"), "Center X");
     }
     use std::collections::BTreeSet;
 
