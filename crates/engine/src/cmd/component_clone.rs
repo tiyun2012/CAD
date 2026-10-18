@@ -253,6 +253,9 @@ pub(super) fn paste(
         };
         let name = unique(&c.name, &mut used);
         let new = scratch.doc_mut().add_component(Some(&name), mapped_parent)?;
+        if let Some(cloned) = scratch.doc_mut().components.iter_mut().find(|c| c.id == new) {
+            cloned.identification_color = c.identification_color;
+        }
         components.insert(*old, new);
         if *old != component {
             scratch.doc_mut().occurrences.retain(|o| o.component != new);

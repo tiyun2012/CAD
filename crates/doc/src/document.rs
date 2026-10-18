@@ -1822,6 +1822,9 @@ pub struct SketchPoints {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Component {
     pub id: u64,
+    /// Optional identification colour, separate from normal appearances.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identification_color: Option<[u8; 3]>,
     pub name: String,
     /// Parent component (0 = the root).
     #[serde(default)]
@@ -2705,7 +2708,7 @@ impl Document {
                 format!("Component{k}")
             }
         };
-        self.components.push(Component { id, name, parent });
+        self.components.push(Component { id, name, parent, identification_color: None });
         self.add_occurrence(id, parent, crate::IDENTITY)?;
         Ok(id)
     }
