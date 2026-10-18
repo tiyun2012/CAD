@@ -736,11 +736,13 @@ mod tests {
 
     /// Every label and id literal in `source` as `(text, id-only)`; `row_label`/`SelInput` indents trimmed.
     fn literals(source: &str) -> Vec<(String, bool)> {
-        let label_file = source.contains("fn tr(text: &str) -> &str") || source.contains("let tr = crate::i18n::tr_label;");
-        let id_file = source.contains("use crate::i18n::tr;") || imports_i18n_tr(source);
-        let mut out = Vec::new();
         // A file the tokenizer refuses would otherwise pass unchecked.
         let tokens = source.parse::<TokenStream>().expect("a UI source file tokenizes");
+        // Which `tr` the file means, read from its tokens (no comments) with the spacing removed.
+        let code: String = tokens.to_string().split_whitespace().collect();
+        let label_file = code.contains("fntr(text:&str)->&str") || code.contains("lettr=crate::i18n::tr_label;");
+        let id_file = code.contains("usecrate::i18n::tr;") || imports_i18n_tr(&code);
+        let mut out = Vec::new();
         scan(tokens.into_iter().collect(), label_file, id_file, &mut out);
         out
     }
@@ -760,7 +762,7 @@ mod tests {
                         push(&tokens, i + 1, 0, false, id_file && !label_file, out);
                     }
                     "tr_label" => push(&tokens, i + 1, 0, false, false, out),
-                    "row_label" => push(&tokens, i + 1, 2, true, false, out),
+                    "row_label" => push(&tokens, i + 1, 1, true, false, out),
                     "SelInput" if is_path(&tokens, i, "new") => push(&tokens, i + 4, 0, true, false, out),
                     "i18n" if is_path(&tokens, i, "tr") => push(&tokens, i + 4, 0, false, true, out),
                     _ => {}
@@ -773,13 +775,19 @@ mod tests {
         }
     }
 
-    /// Record the string literal at `literal` in the parenthesised group at `group`, if any.
-    fn push(tokens: &[TokenTree], group: usize, literal: usize, trim: bool, id_only: bool, out: &mut Vec<(String, bool)>) {
+    /// Record the string literal that is argument `arg` of the parenthesised group at `group`, if any.
+    fn push(tokens: &[TokenTree], group: usize, arg: usize, trim: bool, id_only: bool, out: &mut Vec<(String, bool)>) {
         let Some(TokenTree::Group(g)) = tokens.get(group) else { return };
         if g.delimiter() != Delimiter::Parenthesis {
             return;
         }
-        let Some(TokenTree::Literal(lit)) = g.stream().into_iter().nth(literal) else { return };
+        let mut args = g.stream().into_iter();
+        for _ in 0..arg {
+            if !args.any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                return;
+            }
+        }
+        let Some(TokenTree::Literal(lit)) = args.next() else { return };
         if let Ok(text) = syn::parse_str::<syn::LitStr>(&lit.to_string()) {
             out.push((if trim { text.value().trim_start().to_string() } else { text.value() }, id_only));
         }
@@ -797,7 +805,8 @@ mod tests {
                 && g.stream().to_string().split_whitespace().collect::<String>() == "cfg(test)")
     }
 
-    /// Past the item starting at `i`: its first `{…}` body or `;`.
+    /// Past the item starting at `i`: its first `{…}` body or `;`. `#[cfg(test)]` on a single field,
+    /// array element or expression is not modelled (the UI sources have none).
     fn skip_item(tokens: &[TokenTree], mut i: usize) -> usize {
         while i < tokens.len()
             && !matches!(&tokens[i], TokenTree::Group(g) if g.delimiter() == Delimiter::Brace)
@@ -809,10 +818,10 @@ mod tests {
     }
 
     /// Whether the file imports `tr` from `crate::i18n` inside a use list.
-    fn imports_i18n_tr(source: &str) -> bool {
-        source.split_once("use crate::i18n::{").is_some_and(|(_, rest)| {
-            rest.split_once('}').is_some_and(|(list, _)| list.split(',').any(|item| item.split(" as ").next().is_some_and(|n| n.trim() == "tr")))
-        })
+    /// Whether the use list in `code` (spacing removed) imports `tr` from `crate::i18n` under its own name.
+    fn imports_i18n_tr(code: &str) -> bool {
+        code.split_once("usecrate::i18n::{")
+            .is_some_and(|(_, rest)| rest.split_once('}').is_some_and(|(list, _)| list.split(',').any(|name| name == "tr")))
     }
 
     /// The reference cases from the review, kept as tests of the token scanner.
@@ -864,5 +873,21 @@ mod tests {
     #[test]
     fn a_call_inside_a_macro_is_found() {
         assert_eq!(literals("fn live() { format!(\"{}\", tr_label(\"missing\")); }").len(), 1);
+    }
+
+    #[test]
+    fn a_row_label_after_a_longer_first_argument_is_found() {
+        assert_eq!(
+            literals("fn live() { row_label(&mut ui, \"missing\"); row_label(self.ui, \"  other\"); }"),
+            [("missing".to_string(), false), ("other".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn a_comment_or_spacing_does_not_change_which_tr_a_file_means() {
+        let id = [("Preferences".to_string(), true)];
+        assert_eq!(literals("// fn tr(text: &str) -> &str\nuse crate::i18n::tr;\nfn live() { tr(\"Preferences\"); }"), id);
+        assert_eq!(literals("use crate :: i18n :: tr;\nfn live() { tr(\"Preferences\"); }"), id);
+        assert_eq!(literals("use crate::i18n::{format, tr};\nfn live() { tr(\"Preferences\"); }"), id);
     }
 }
