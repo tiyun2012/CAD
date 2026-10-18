@@ -2153,6 +2153,10 @@ fn offset_face(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 #[cfg(test)]
+#[path = "pattern_copies_tests.rs"]
+mod pattern_copies_tests;
+
+#[cfg(test)]
 #[path = "patterns_tests.rs"]
 mod patterns_tests;
 
