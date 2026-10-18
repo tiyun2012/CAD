@@ -72,11 +72,11 @@ fn compass_negative_ends_are_hollow_and_positive_ends_are_chunkier() {
             let end = circles.iter().find(|circle| circle.center == painted).unwrap();
             if positive {
                 assert_eq!(end.fill, t.triad[0]);
-                assert_eq!(end.radius, 12.0);
+                assert_eq!(end.radius, 13.0);
                 assert!(output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(text) if text.galley.text() == "X")));
             } else {
                 assert_eq!(end.fill, Color32::TRANSPARENT);
-                assert_eq!(end.stroke, Stroke::new(2.0, t.triad[0]));
+                assert_eq!(end.stroke, Stroke::new(2.2, t.triad[0]));
                 assert_eq!(end.radius, 6.5);
                 assert!(!output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(_))));
             }
