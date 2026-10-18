@@ -773,47 +773,62 @@ fn support_faces(body: &Body, chain: &[mt::Edge], leave: Vec3) -> Result<Vec<mt:
     Ok(out)
 }
 
+/// The area vector of a closed polygon (Newell's method): normal to the loop, as long as the area
+/// it encloses, pointing the way the loop runs round by the right-hand rule.
+fn loop_area(points: &[Vec3]) -> Vec3 {
+    let mut n = Vec3::ZERO;
+    for (i, p) in points.iter().enumerate() {
+        let Some(q) = points.get((i + 1) % points.len()) else { continue };
+        n += Vec3::new((p.y - q.y) * (p.z + q.z), (p.z - q.z) * (p.x + q.x), (p.x - q.x) * (p.y + q.y));
+    }
+    n * 0.5
+}
+
 /// Where the second chain's stations start, and which way they run, so that they pair with the
-/// first chain's `a` station by station: `seam` (a point the second chain should start at) when
-/// given; otherwise, on a closed chain, the start and direction that put each station closest to
-/// its partner (two rims whose seams sit apart would otherwise give a twisted blend), and on an
-/// open chain the direction that does.
+/// first chain's `a` station by station. An open chain runs from the end `seam` (a point on it)
+/// is nearer, or else the way that puts its ends nearer their partners. A closed chain runs round
+/// the same way as the first (by their area vectors; the nearer pairing when they stand almost
+/// at right angles), from `seam` when given, or else from the start that puts each station
+/// closest to its partner: two rims whose seams sit apart would otherwise give a twisted blend.
 fn pair_with(a: &[(Vec3, usize)], line: &ChainLine, seam: Option<Vec3>) -> Result<Vec<(Vec3, usize)>> {
     let count = a.len();
     let cost = |start: f64, backwards: bool| -> Result<f64> {
         Ok(line.stations(count, start, backwards)?.iter().zip(a).map(|((q, _), (p, _))| p.dist(*q)).sum())
     };
-    let best_of = |starts: &[f64]| -> Result<(f64, bool, f64)> {
+    let best_of = |starts: &[f64], directions: &[bool]| -> Result<(f64, bool)> {
         let mut best = (0.0, false, f64::INFINITY);
         for &start in starts {
-            for backwards in [false, true] {
+            for &backwards in directions {
                 let c = cost(start, backwards)?;
                 if c < best.2 {
                     best = (start, backwards, c);
                 }
             }
         }
-        Ok(best)
+        Ok((best.0, best.1))
     };
     if !line.closed {
-        // The seam picks which end starts; without one, the ends pair the closer way round.
         let backwards = match seam {
             Some(p) => line.nearest(p) > line.length() / 2.0,
-            None => best_of(&[0.0])?.1,
+            None => best_of(&[0.0], &[false, true])?.1,
         };
         return line.stations(count, 0.0, backwards);
     }
-    if let Some(p) = seam {
-        let start = line.nearest(p);
-        let (_, backwards, _) = best_of(&[start])?;
-        return line.stations(count, start, backwards);
-    }
-    // A closed chain: try starts four to a station spacing, then narrow the best one down to a
-    // thousandth of a spacing (the cost is smooth near its least).
     let total = line.length();
     let spacing = total / (count.max(2) - 1) as f64;
     let coarse: Vec<f64> = (0..4 * (count.max(2) - 1)).map(|k| k as f64 * spacing / 4.0).collect();
-    let (mut start, backwards, _) = best_of(&coarse)?;
+    // The way round: the same sense as the first loop, unless the two loops stand almost at right
+    // angles (then the area vectors cannot say, and the nearer pairing does).
+    let ring = |pts: &[(Vec3, usize)]| loop_area(&pts.iter().take(pts.len().saturating_sub(1)).map(|(p, _)| *p).collect::<Vec<_>>());
+    let (area_a, area_b) = (ring(a), ring(&line.stations(count, 0.0, false)?));
+    let agree = area_a.dot(area_b);
+    let backwards = if agree.abs() > 0.2 * area_a.len() * area_b.len() { agree < 0.0 } else { best_of(&coarse, &[false, true])?.1 };
+    if let Some(p) = seam {
+        return line.stations(count, line.nearest(p), backwards);
+    }
+    // Starts four to a station spacing, then the best one narrowed down to a thousandth of a
+    // spacing (the cost is smooth near its least).
+    let (mut start, _) = best_of(&coarse, &[backwards])?;
     let (mut lo, mut hi) = (start - spacing / 4.0, start + spacing / 4.0);
     while hi - lo > spacing * 1e-3 {
         let (m1, m2) = (lo + (hi - lo) / 3.0, hi - (hi - lo) / 3.0);
