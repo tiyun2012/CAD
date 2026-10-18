@@ -27,8 +27,10 @@ new uses of it anywhere else. Public docs/web/Flatpak deployments use project Pa
 ## Never crash
 People trust SolidCraft with their designs; a crash loses their work. **This outranks feature work.**
 - **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`,
-  `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`). The three exceptions, in the app crate
-  (which denies it instead), have no safe API: two functions in
+  `unimplemented!`; no `unsafe` (`unsafe_code = "forbid"`). The exceptions, in the app crate and in
+  `crates/threedx-client` (which deny it instead), have no safe API: the macOS-only
+  `crates/threedx-client/src/macos.rs` (loads the 3Dconnexion driver's client framework at run time
+  and calls through its function pointers), two functions in
   `apps/solidcraft/src/open_documents.rs` (macOS hands Finder files only to an Objective-C
   method), the Windows-only `apps/solidcraft/src/native_crash.rs` (the exception filter that
   records crashes inside native code such as graphics drivers) and the Windows-only
@@ -127,7 +129,8 @@ People trust SolidCraft with their designs; a crash loses their work. **This out
 - Before working on issue #N, check nobody has it: `gh pr list -R bherbruck/solidcraft --state open --search "#N"`.
 - If none, branch from the latest `origin/main`, `git commit --allow-empty -m "claim: #N"`, push,
   and open a **draft** PR titled `<summary> (#N)` right away. **The lowest-numbered open PR for an
-  issue wins**; if yours lost, close it. Don't claim by commenting or by editing files.
+  issue wins**; if yours lost, close it. Opening the PR is the claim: the bot assigns you and
+  labels the issue `in progress` (or says on your PR who holds it). Don't claim by editing files.
 - Push work in progress at least daily. A draft with no pushes for 72 hours may be taken over:
   comment on it first, then open your own claim (you may start from its branch).
 - On a shared build machine, check the load before a big build (`cut -d' ' -f1 /proc/loadavg`)
