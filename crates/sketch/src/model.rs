@@ -43,6 +43,51 @@ pub enum SketchError {
 
 pub(crate) type Result<T> = std::result::Result<T, SketchError>;
 
+/// A point used by a constraint, either stored or derived from live geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PointRef {
+    Point { p: usize },
+    Midpoint { l: usize },
+}
+
+impl PointRef {
+    /// Evaluate against the current sketch, without creating a sketch point.
+    pub fn position(self, sk: &Sketch) -> Option<Vec2> {
+        self.evaluate(sk, |p| sk.point(p))
+    }
+
+    pub(crate) fn evaluate(self, sk: &Sketch, point: impl Fn(usize) -> Option<Vec2>) -> Option<Vec2> {
+        match self {
+            Self::Point { p } => point(p),
+            Self::Midpoint { l } => match sk.curves.get(l)?.kind {
+                CurveKind::Line { a, b } => Some((point(a)? + point(b)?) * 0.5),
+                _ => None,
+            },
+        }
+    }
+
+    fn indices(self) -> (Vec<usize>, Vec<usize>) {
+        match self {
+            Self::Point { p } => (vec![p], vec![]),
+            Self::Midpoint { l } => (vec![], vec![l]),
+        }
+    }
+
+    fn remap(&mut self, pmap: &dyn Fn(usize) -> Option<usize>, cmap: &dyn Fn(usize) -> Option<usize>) -> bool {
+        let (index, map) = match self {
+            Self::Point { p } => (p, pmap),
+            Self::Midpoint { l } => (l, cmap),
+        };
+        if let Some(new) = map(*index) {
+            *index = new;
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// A sketch point. `fixed` points are constants for the solver.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SPoint {
@@ -219,6 +264,12 @@ pub enum ConstraintKind {
     VerticalPoints {
         p: usize,
         q: usize,
+    },
+    /// Horizontal/vertical alignment involving a derived point.
+    Alignment {
+        a: PointRef,
+        b: PointRef,
+        horizontal: bool,
     },
     Parallel {
         a: usize,
@@ -398,6 +449,8 @@ impl ConstraintKind {
             Coincident { .. } | PointOnCurve { .. } => "Coincident",
             Horizontal { .. } | HorizontalPoints { .. } => "Horizontal",
             Vertical { .. } | VerticalPoints { .. } => "Vertical",
+            Alignment { horizontal: true, .. } => "Horizontal",
+            Alignment { horizontal: false, .. } => "Vertical",
             Parallel { .. } => "Parallel",
             Perpendicular { .. } => "Perpendicular",
             Collinear { .. } => "Collinear",
@@ -428,6 +481,13 @@ impl ConstraintKind {
         match *self {
             PatternPoint { p, q, center, directions, .. } => {
                 (vec![p, q].into_iter().chain(center).collect(), directions.into_iter().flatten().map(|(l, _)| l).collect())
+            }
+            Alignment { a, b, .. } => {
+                let (mut ps, mut cs) = a.indices();
+                let (bp, bc) = b.indices();
+                ps.extend(bp);
+                cs.extend(bc);
+                (ps, cs)
             }
             PatternRadius { a, b } => (vec![], vec![a, b]),
             Coincident { p, q } | HorizontalPoints { p, q } | VerticalPoints { p, q } => (vec![p, q], vec![]),
@@ -463,6 +523,7 @@ impl ConstraintKind {
             None => ok2 = false,
         };
         match self {
+            Alignment { a, b, .. } => return a.remap(pmap, cmap) && b.remap(pmap, cmap),
             PatternPoint { p, q, center, directions, .. } => {
                 fp(p);
                 fp(q);
@@ -856,6 +917,16 @@ impl Sketch {
         let need_line = |i: usize| if is_line(i) { Ok(()) } else { Err(SketchError::WrongKind(name(i), "needs a line".into())) };
         let need_round = |i: usize| if is_round(i) { Ok(()) } else { Err(SketchError::WrongKind(name(i), "needs a circle or arc".into())) };
         match *k {
+            Alignment { a, b, .. } => {
+                if a == b {
+                    return Err(SketchError::Invalid("alignment needs two distinct point references".into()));
+                }
+                for target in [a, b] {
+                    if let PointRef::Midpoint { l } = target {
+                        need_line(l)?;
+                    }
+                }
+            }
             PatternPoint { p, q, angle, offset, directions, .. } => {
                 for (l, distance) in directions.into_iter().flatten() {
                     need_line(l)?;

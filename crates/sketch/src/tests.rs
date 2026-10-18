@@ -1055,3 +1055,54 @@ fn profiles_crossing_next_to_an_overshooting_end_keeps_the_corner_beside_it() {
     assert_eq!(areas.len(), 1, "{areas:?}");
     assert!(areas.iter().all(|a| (a - (2.0 - x)).abs() < 1e-4), "{areas:?}");
 }
+
+#[test]
+fn virtual_midpoint_alignment_reads_live_endpoints_and_keeps_one_free_axis() {
+    for horizontal in [true, false] {
+        let mut sk = Sketch::new();
+        let l = sk.add_line(v(10., 10.), v(30., 20.), None, None, None).unwrap();
+        let p = sk.add_point(v(24., 40.), None).unwrap();
+        let CurveKind::Line { a, b } = sk.curves[l].kind else { panic!() };
+        sk.points[a].fixed = true;
+        sk.points[b].fixed = true;
+        let free = if horizontal { sk.points[p].pos.x } else { sk.points[p].pos.y };
+        sk.add_constraint(ConstraintKind::Alignment { a: PointRef::Midpoint { l }, b: PointRef::Point { p }, horizontal }, None).unwrap();
+        let rep = solve(&mut sk);
+        assert!(rep.ok(), "{rep:?}");
+        assert_eq!(rep.dof, 1);
+        assert!(!rep.point_determined[p]);
+        assert_eq!(sk.points.len(), 4, "origin, two ends, target; no helper point");
+        for end in [v(60., -15.), v(-40., 70.), v(10., 10.)] {
+            sk.points[b].pos = end;
+            let rep = solve(&mut sk);
+            assert!(rep.ok(), "{rep:?}");
+            let m = PointRef::Midpoint { l }.position(&sk).unwrap();
+            let point = sk.point(p).unwrap();
+            assert!((if horizontal { point.y - m.y } else { point.x - m.x }).abs() < 1e-7);
+            assert!((if horizontal { point.x } else { point.y } - free).abs() < 1e-7);
+        }
+    }
+}
+
+#[test]
+fn virtual_midpoint_alignment_depends_on_both_lines_and_remaps_safely() {
+    let mut sk = Sketch::new();
+    let l = sk.add_line(v(10., 10.), v(30., 20.), None, None, None).unwrap();
+    let q = sk.add_line(v(40., 30.), v(50., 60.), None, None, None).unwrap();
+    let kind = ConstraintKind::Alignment { a: PointRef::Midpoint { l }, b: PointRef::Midpoint { l: q }, horizontal: false };
+    sk.add_constraint(kind.clone(), None).unwrap();
+    let rep = solve(&mut sk);
+    assert!(rep.ok(), "{rep:?}");
+    assert_eq!(rep.dof, 7, "one equation on eight endpoint coordinates");
+    assert!((PointRef::Midpoint { l }.position(&sk).unwrap().x - PointRef::Midpoint { l: q }.position(&sk).unwrap().x).abs() < 1e-7);
+    assert_eq!(kind.indices(), (vec![], vec![l, q]));
+    let mut remapped = kind.clone();
+    assert!(remapped.remap(&Some, &|c| Some(c + 3)));
+    assert_eq!(remapped.indices().1, vec![l + 3, q + 3]);
+    assert!(!remapped.remap(&Some, &|_| None));
+    let p = sk.add_point(v(1., 2.), None).unwrap();
+    let circle = sk.add_circle(v(0., 0.), 5., None, None).unwrap();
+    for target in [PointRef::Midpoint { l: usize::MAX }, PointRef::Midpoint { l: circle }, PointRef::Point { p: usize::MAX }] {
+        assert!(sk.add_constraint(ConstraintKind::Alignment { a: target, b: PointRef::Point { p }, horizontal: true }, None).is_err());
+    }
+}

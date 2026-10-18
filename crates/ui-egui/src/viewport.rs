@@ -2435,18 +2435,18 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             if let Some(p) = at
                 && app.tool.as_ref().is_some_and(|t| t.pts.len() == 1)
             {
-                crate::tools::on_hover(app, &proj, p);
-                crate::tools::on_click(app, &proj, p);
+                crate::tools::on_hover(app, &proj, p, mods.shift);
+                crate::tools::on_click(app, &proj, p, mods.shift);
             }
         } else if let Some(p) = at {
-            crate::tools::on_hover(app, &proj, p);
+            crate::tools::on_hover(app, &proj, p, mods.shift);
         }
     }
     let add = mods.shift || mods.command || mods.ctrl;
     crate::sketch_text::set_one_letter(mods.shift);
     if let Some(p) = hover.filter(|_| inside) {
         if app.tool.is_some() {
-            crate::tools::on_hover(app, &proj, p);
+            crate::tools::on_hover(app, &proj, p, mods.shift);
         }
         // Rectangles, circles and polygons also draw by press, drag and release (#1630): the press
         // places the first point as a click there would, the release the second.
@@ -2458,7 +2458,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             && resp.drag_started_by(egui::PointerButton::Primary)
             && let Some(a) = ui.input(|i| i.pointer.press_origin())
         {
-            crate::tools::on_click(app, &proj, a);
+            crate::tools::on_click(app, &proj, a, mods.shift);
             app.viewport.draw_drag = app.tool.as_ref().is_some_and(|t| t.pts.len() == 1);
         }
         let reference_pick = (resp.clicked() || resp.double_clicked())
@@ -2467,7 +2467,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             && crate::dim_view::pick_reference(ui.ctx(), p, resp.double_clicked());
         if resp.clicked() && !held && !reference_pick {
             if app.tool.is_some() {
-                crate::tools::on_click(app, &proj, p);
+                crate::tools::on_click(app, &proj, p, mods.shift);
             } else if app.dialog.as_ref().is_some_and(|d| d.wants_picks()) {
                 if let Some((hit, Some(sel))) = cand {
                     dialog_pick(app, &hit, sel);

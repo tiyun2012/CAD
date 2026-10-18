@@ -169,7 +169,18 @@ fresh link once the source is available; their stored point values are preserved
 
 **Horizontal/Vertical** accepts a click on a line or clicks on two distinct sketch points,
 including the origin, endpoints and circle centres. For two points, it chooses horizontal
-or vertical alignment from their current positions. Esc cancels a pending first point.
+or vertical alignment from their current positions. Hold **Shift** near a line's midpoint to
+highlight and select it as either point. The midpoint follows both endpoints as the line moves,
+resizes or rotates, and no helper point is added. Two line midpoints can also be aligned.
+Esc cancels a pending first point.
+
+Scripts use the same command, with a midpoint reference in the `points` array:
+
+```json
+{"command":"sketch.constraint.horizontal_vertical","params":{"points":[{"midpoint":"l1"},"c1.center"],"mode":"vertical"}}
+```
+
+`mode` can be `horizontal` or `vertical`; omitting it chooses from the current positions.
 
 The solver is SolidCraft's own (damped Gauss–Newton with degree-of-freedom analysis). Constraints:
 coincident, horizontal/vertical, parallel, perpendicular, tangent, equal, concentric, collinear,

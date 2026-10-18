@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 use solidcraft_doc::{FeatureKind, PlaneRef, expr::Kind};
 use solidcraft_geom::{Plane, Vec2, Vec3};
-use solidcraft_sketch::{Analysis, Budget, ConstraintKind, CurveKind, Hold, Sketch, SolveReport, solve, solve_with};
+use solidcraft_sketch::{Analysis, Budget, ConstraintKind, CurveKind, Hold, PointRef, Sketch, SolveReport, solve, solve_with};
 
 use super::{CommandSpec, in_sketch};
 use crate::params::{bad, bool_, expr, num, req_vec2, str_, string_list, vec2, vec3};
@@ -117,7 +117,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         .at("SKETCH", "CONSTRAINTS")
         .icon("c_hv")
         .enabled(in_sketch)
-        .params("line: id | points: [a, b]; mode?: horizontal|vertical"),
+        .params("line: id | points: [a, b] (point ids or {midpoint: line_id}, no helper geometry); mode?: horizontal|vertical"),
     CommandSpec::new("sketch.constraint.coincident", "Coincident", c_coincident)
         .at("SKETCH", "CONSTRAINTS")
         .icon("c_coincident")
@@ -1579,15 +1579,42 @@ fn c_horizontal_vertical(s: &mut Session, p: &Value) -> Result<Value> {
     let mode = str_(p, "mode").map(str::to_ascii_lowercase);
     constrain(s, p, cmd, |sk| {
         if let Some(pts) = p.get("points").and_then(Value::as_array) {
-            let a = point_ref(sk, pts.first(), cmd, "points[0]")?;
-            let b = point_ref(sk, pts.get(1), cmd, "points[1]")?;
-            let d = sk.point(b).unwrap_or_default() - sk.point(a).unwrap_or_default();
+            if pts.len() != 2 {
+                return Err(bad(cmd, "`points` needs exactly two point references"));
+            }
+            let target = |v: &Value| -> Result<PointRef> {
+                if let Some(line) = v.get("midpoint") {
+                    let l = curve_ref(sk, Some(line), cmd, "midpoint")?;
+                    if !matches!(sk.curves.get(l).map(|c| &c.kind), Some(CurveKind::Line { .. })) {
+                        return Err(bad(cmd, "a midpoint reference needs a line"));
+                    }
+                    Ok(PointRef::Midpoint { l })
+                } else {
+                    Ok(PointRef::Point { p: point_ref(sk, Some(v), cmd, "points")? })
+                }
+            };
+            let a = target(pts.first().ok_or_else(|| bad(cmd, "missing first point"))?)?;
+            let b = target(pts.get(1).ok_or_else(|| bad(cmd, "missing second point"))?)?;
+            if a == b {
+                return Err(bad(cmd, "alignment needs two distinct point references"));
+            }
+            let d =
+                b.position(sk).ok_or_else(|| bad(cmd, "invalid second point"))? - a.position(sk).ok_or_else(|| bad(cmd, "invalid first point"))?;
             let horiz = match mode.as_deref() {
                 Some("horizontal") => true,
                 Some("vertical") => false,
                 _ => d.x.abs() >= d.y.abs(),
             };
-            return Ok(if horiz { ConstraintKind::HorizontalPoints { p: a, q: b } } else { ConstraintKind::VerticalPoints { p: a, q: b } });
+            return Ok(match (a, b) {
+                (PointRef::Point { p }, PointRef::Point { p: q }) => {
+                    if horiz {
+                        ConstraintKind::HorizontalPoints { p, q }
+                    } else {
+                        ConstraintKind::VerticalPoints { p, q }
+                    }
+                }
+                _ => ConstraintKind::Alignment { a, b, horizontal: horiz },
+            });
         }
         let l = curve_ref(sk, p.get("line"), cmd, "line")?;
         let (a, b) = match sk.curves.get(l).map(|c| &c.kind) {

@@ -303,3 +303,64 @@ fn symmetry_moves_a_free_line_between_two_fixed_lines() {
         assert!((at(end).x - x).abs() < 1e-9, "{end} moved to {:?}", at(end));
     }
 }
+
+#[test]
+fn virtual_midpoint_alignment_persists_undoes_and_survives_endpoint_edits() {
+    use solidcraft_sketch::{ConstraintKind, PointRef};
+    for mode in ["horizontal", "vertical"] {
+        for reverse in [false, true] {
+            let mut s = new_sketch();
+            run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+            run(&mut s, "sketch.point", json!({"point":[24,40],"id":"target"}));
+            let before = s.doc.to_json();
+            let undo = s.undo.len();
+            let refs = if reverse { json!(["target",{"midpoint":"l1"}]) } else { json!([{"midpoint":"l1"},"target"]) };
+            let result = run(&mut s, "sketch.constraint.horizontal_vertical", json!({"points":refs,"mode":mode}));
+            assert!(result["created"]["points"].as_array().unwrap().is_empty());
+            assert!(result["created"]["curves"].as_array().unwrap().is_empty());
+            assert_eq!(s.undo.len(), undo + 1);
+            let after = s.doc.to_json();
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.to_json(), before);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.to_json(), after);
+            let mut reopened = Session::new(solidcraft_doc::Document::from_json(&after).unwrap());
+            reopened.active_sketch = s.active_sketch;
+            for end in [[50., -15.], [-20., 65.]] {
+                run(&mut reopened, "sketch.move_point", json!({"point":"l1.end","to":end}));
+                let sk = sketch(&reopened);
+                let point = sk.point(sk.resolve_point("target").unwrap()).unwrap();
+                let mid = PointRef::Midpoint { l: sk.curve_index("l1").unwrap() }.position(&sk).unwrap();
+                assert!((if mode == "horizontal" { point.y - mid.y } else { point.x - mid.x }).abs() < 1e-6);
+                assert_eq!(sk.points.len(), 4);
+            }
+            let sk = sketch(&reopened);
+            assert!(sk.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Alignment { .. })));
+            run(&mut reopened, "sketch.delete", json!({"entities":["l1"]}));
+            assert!(!sketch(&reopened).constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Alignment { .. })));
+        }
+    }
+}
+
+#[test]
+fn virtual_midpoint_alignment_rejects_invalid_or_conflicting_references_atomically() {
+    let mut s = new_sketch();
+    run(&mut s, "sketch.line", json!({"points":[[10,10],[30,20]],"infer":false,"connect":false}));
+    run(&mut s, "sketch.circle.center", json!({"center":[40,50],"radius":3}));
+    run(&mut s, "sketch.constraint.fix", json!({"entities":["l1","c1"]}));
+    for points in [
+        json!([{"midpoint":"l1"},"c1.center"]),
+        json!([{"midpoint":"c1"},"origin"]),
+        json!([{"midpoint":"missing"},"origin"]),
+        json!([{"midpoint":"l1"},{"midpoint":"l1"}]),
+        json!([{"midpoint":12},"origin"]),
+        json!([{"midpoint":"l1"}]),
+        json!([{"midpoint":"l1"},"origin","c1.center"]),
+    ] {
+        let before = s.doc.to_json();
+        let undo = s.undo.len();
+        assert!(s.execute("sketch.constraint.horizontal_vertical", &json!({"points":points,"mode":"vertical"})).is_err(), "{points}");
+        assert_eq!(s.doc.to_json(), before);
+        assert_eq!(s.undo.len(), undo);
+    }
+}
