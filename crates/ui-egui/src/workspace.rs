@@ -62,6 +62,20 @@ const SHEET_MODIFY: &[&str] = &[
     "parameters.change",
 ];
 
+
+/// Manufacture INSPECT panel: Measure + Section pinned; analyses in the dropdown.
+const MFG_INSPECT: &[&str] = &[
+    "inspect.measure",
+    "inspect.section",
+    "inspect.curvature_comb",
+    "inspect.zebra",
+    "inspect.draft",
+    "inspect.isocurve",
+    "inspect.accessibility",
+    "inspect.minimum_radius",
+    "inspect.sustainability",
+];
+
 const PLASTIC_SETUP: &[&str] = &["plastic.manage_rules", "plastic.assign_rule"];
 
 const PLASTIC_CREATE: &[&str] = &[
@@ -130,6 +144,7 @@ pub fn layout<'a>(tab: &str, panel: &str, specs: &[&'a CommandSpec]) -> Option<(
         // The solid tab's panels.
         ("PLASTIC", "MODIFY") => (&[], 4, "SOLID"),
         ("SHEET METAL" | "PLASTIC", "CONSTRUCT" | "INSPECT" | "INSERT") => (&[], 2, "SOLID"),
+        ("MANUFACTURE", "INSPECT") => (MFG_INSPECT, 2, tab),
         _ => return None,
     };
     let mut out: Vec<&CommandSpec> = ids.iter().filter_map(|id| specs.iter().find(|c| c.id == *id).copied()).collect();

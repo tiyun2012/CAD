@@ -29,6 +29,7 @@ pub fn panels(tab: &str) -> &'static [&'static str] {
         "SHEET METAL" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
         "PLASTIC" => &["CREATE", "MODIFY", "ASSEMBLE", "CONSTRUCT", "INSPECT", "INSERT", "SELECT"],
         "RENDER" => &["SCENE"],
+        "MANUFACTURE" => &["SETUP", "INSPECT", "SELECT"],
         _ => &["MAKE", "ADD-INS", "UTILITY", "INSPECT", "SELECT"],
     }
 }
@@ -654,7 +655,13 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let ws = Rect::from_min_max(pos2(r.left() + 6.0, r.top() + 4.0), pos2(r.left() + 104.0, r.bottom() - 5.0));
         let wresp = ui.interact(ws, ui.id().with("workspace_switcher"), Sense::click());
         painter.rect(ws, 4.0, if wresp.hovered() { t.hover } else { t.field }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        let workspace_icon = if crate::render_workspace::active(app) { "ws_render" } else { "ws_design" };
+        let workspace_icon = if crate::render_workspace::active(app) {
+            "ws_render"
+        } else if crate::manufacture_workspace::active(app) {
+            "ws_manufacture"
+        } else {
+            "ws_design"
+        };
         icons::paint(
             &painter,
             Rect::from_center_size(pos2(ws.center().x, ws.top() + 24.0), vec2(26.0, 26.0)),
@@ -666,7 +673,13 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         painter.text(
             pos2(ws.center().x - 5.0, ws.top() + 52.0),
             Align2::CENTER_CENTER,
-            app.tr_label(if crate::render_workspace::active(app) { "RENDER" } else { crate::toolbar_custom::WORKSPACE }),
+            app.tr_label(if crate::render_workspace::active(app) {
+                "RENDER"
+            } else if crate::manufacture_workspace::active(app) {
+                "MANUFACTURE"
+            } else {
+                crate::toolbar_custom::WORKSPACE
+            }),
             FontId::proportional(12.0),
             t.text,
         );
@@ -684,6 +697,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
         if crate::render_workspace::active(app) {
             tabs.push("RENDER");
+        } else if crate::manufacture_workspace::active(app) {
+            tabs.push("MANUFACTURE");
         } else {
             tabs.extend(TABS.iter());
         }
