@@ -1986,7 +1986,14 @@ fn triad(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut OccMove) {
     let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::new("sc_occ_triad_layer"));
     let mut gui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(rect));
     let painter = gui.painter().with_clip_rect(rect);
-    let t = gizmo::Triad { center, translate: true, rotate: true };
+    let t = gizmo::Triad {
+        center,
+        translate: true,
+        rotate: true,
+        ring_axis: None,
+        translate_u: None,
+        translate_v: None,
+    };
     let step = crate::canvas::snap_step(app.cam.half_height());
     let Some(g) = gizmo::show(&mut gui, &painter, &proj, egui::Id::new("sc_occ_triad"), &t, step) else { return };
     if g.started || m.drag0.is_none() {
@@ -2000,6 +2007,7 @@ fn triad(app: &mut SolveApp, ui: &mut egui::Ui, m: &mut OccMove) {
                 *slot = a0.get(axis).copied().unwrap_or(0.0) + angle.to_degrees();
             }
         }
+        Change::RotateAbout { .. } => {}
     }
     if g.done {
         m.drag0 = None;
