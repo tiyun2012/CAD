@@ -294,6 +294,8 @@ pub struct Prefs {
     pub supersampling_adaptive: bool,
     /// Show the frame rate in the view's corner (the view then redraws every frame).
     pub show_frame_rate: bool,
+    /// With the frame rate: a frame-time graph, a histogram and what the GPU drew (#2548).
+    pub frame_rate_details: bool,
     /// Show world X/Y/Z component dimensions beside the total distance in Measure.
     pub measure_axis_distances: bool,
     /// Decimals shown for lengths and angles.
@@ -429,6 +431,7 @@ impl Default for Prefs {
             supersampling: 1.0,
             supersampling_adaptive: true,
             show_frame_rate: false,
+            frame_rate_details: false,
             measure_axis_distances: true,
             length_decimals: 2,
             angle_decimals: 1,
@@ -748,6 +751,7 @@ fn defaults(app: &mut SolveApp, page: usize) {
             p.supersampling = d.supersampling;
             p.supersampling_adaptive = d.supersampling_adaptive;
             p.show_frame_rate = d.show_frame_rate;
+            p.frame_rate_details = d.frame_rate_details;
             p.measure_axis_distances = d.measure_axis_distances;
             p.color_vision = d.color_vision;
             app.ui.visual_style = 0;
@@ -1478,6 +1482,10 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.checkbox(&mut app.preferences.show_frame_rate, "");
             ui.end_row();
             note(ui, app.tr("settings.frame_rate_note"));
+            ui.label(app.tr("ui.frame_rate_details"));
+            ui.add_enabled(app.preferences.show_frame_rate, egui::Checkbox::without_text(&mut app.preferences.frame_rate_details));
+            ui.end_row();
+            note(ui, app.tr("settings.frame_rate_details_note"));
         }
         5 => {
             ui.label(crate::i18n::tr_label("Project face edges into new sketches"));
