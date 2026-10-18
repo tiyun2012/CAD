@@ -127,6 +127,12 @@ Changes:
 - `tessellation/triangulation.rs`: meshed faces and edges are built unchecked: faces whose loop
   runs along a seam edge both ways and closed edges (a full circle on one vertex) are valid,
   but the debug-build checks rejected them (debug builds could not mesh them).
+- `tessellation/triangulation.rs`, bounded work: a polyline that closes an open boundary loop
+  along the surface's domain with more than 20 000 points leaves the face unmeshed (reported by
+  `Body::validity`) instead of meshing it. A sound loop's closing polylines have a few points;
+  a loop laid out across millions of periods had 4.3 million, and meshing them never finished,
+  which hung the STEP export that reads its own file back (#1985). `boundary_test_hooks`, behind
+  the `test-hooks` feature, lets `crates/kernel/tests/closing_polyline_budget.rs` check it.
 - `tessellation/triangulation.rs`: parameter searches that land outside a surface's bounded,
   non-periodic domain are rejected (a hinted B-spline search can run off and extrapolate to
   thousands of parameter units, and meshing that grid never finishes); the last-resort nearest
