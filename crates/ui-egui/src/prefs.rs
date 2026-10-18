@@ -321,6 +321,8 @@ pub struct Prefs {
     pub smooth_wheel_zoom: bool,
     /// Two-finger trackpad scroll pans (off: it zooms like the wheel); pinch always zooms.
     pub trackpad_pan: bool,
+    /// Horizontal trackpad and thumb-wheel scrolling pans the view the other way (#2007).
+    pub pan_reverse_x: bool,
     /// View changes (axis view, Look At, Home) animate; `look_at_speed` scales how fast.
     pub look_at_anim: bool,
     pub look_at_speed: f32,
@@ -367,6 +369,11 @@ pub struct Prefs {
     pub agent_chat_side: String,
     pub agent_chat_width: f32,
     pub agent_chat_minimized: bool,
+    /// Whether the chat is in its own window instead of the side panel, and that window's place
+    /// and size as the system last reported them (`[x, y, width, height]`, points; `x` can be
+    /// negative or past the main screen when the window sits on another one).
+    pub agent_chat_popped: bool,
+    pub agent_chat_window: Option<[f32; 4]>,
     /// Changes the agent may make for one message.
     pub agent_chat_turn_limit: u32,
 }
@@ -432,6 +439,7 @@ impl Default for Prefs {
             zoom_to_cursor: true,
             smooth_wheel_zoom: true,
             trackpad_pan: true,
+            pan_reverse_x: false,
             look_at_anim: true,
             look_at_speed: 1.0,
             up_axis: "z".into(),
@@ -457,6 +465,8 @@ impl Default for Prefs {
             agent_chat_side: "right".into(),
             agent_chat_width: 380.0,
             agent_chat_minimized: false,
+            agent_chat_popped: false,
+            agent_chat_window: None,
             agent_chat_turn_limit: crate::agent_chat::gate::DEFAULT_TURN_LIMIT,
         }
     }
@@ -616,6 +626,8 @@ fn defaults(app: &mut SolveApp, page: usize) {
             p.agent_chat_side = d.agent_chat_side;
             p.agent_chat_width = d.agent_chat_width;
             p.agent_chat_minimized = d.agent_chat_minimized;
+            p.agent_chat_popped = d.agent_chat_popped;
+            p.agent_chat_window = d.agent_chat_window;
             p.agent_chat_turn_limit = d.agent_chat_turn_limit;
         }
         1 => {
@@ -626,6 +638,7 @@ fn defaults(app: &mut SolveApp, page: usize) {
             p.zoom_to_cursor = d.zoom_to_cursor;
             p.smooth_wheel_zoom = d.smooth_wheel_zoom;
             p.trackpad_pan = d.trackpad_pan;
+            p.pan_reverse_x = d.pan_reverse_x;
             p.orbit_around = d.orbit_around;
             p.orbit_cursor = d.orbit_cursor;
             p.space_mouse_enabled = d.space_mouse_enabled;
@@ -727,6 +740,11 @@ pub fn set_autosave(app: &mut SolveApp) {
 /// Which navigation dragging `button` with `mods` held does under the preset.
 pub fn nav_mode(app: &SolveApp, button: NavButton, mods: Modifiers) -> Option<NavMode> {
     nav_preset(&app.preferences.nav).mode(button, mods)
+}
+
+/// +1, or −1 when horizontal scrolling pans the other way (#2007).
+pub fn pan_sign_x(app: &SolveApp) -> f32 {
+    if app.preferences.pan_reverse_x { -1.0 } else { 1.0 }
 }
 
 /// +1, or −1 when the wheel zooms the other way.
@@ -1157,6 +1175,10 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
             } else {
                 crate::i18n::tr_label("Trackpad gestures pan (off: they zoom like the wheel); mouse wheel zooms, thumb wheel pans sideways, pinch always zooms")
             });
+            ui.end_row();
+            ui.label(crate::i18n::tr_label("Reverse horizontal pan direction"));
+            ui.checkbox(&mut app.preferences.pan_reverse_x, "")
+                .on_hover_text(crate::i18n::tr_label("Horizontal two-finger scrolling and the thumb wheel pan the other way"));
             ui.end_row();
             ui.label(crate::i18n::tr_label("Orbit around"));
             // Wrapped: three choices, and German or Russian labels are long.
@@ -1836,6 +1858,18 @@ mod tests {
         let mut other = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         other.load_prefs(&app.prefs());
         assert_eq!(other.preferences.nav, OPENSCAD_NAV);
+    }
+
+    #[test]
+    fn pan_reverse_x_defaults_off_persists_and_flips_the_sign() {
+        assert!(!serde_json::from_value::<Prefs>(json!({})).unwrap().pan_reverse_x);
+        let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        assert_eq!(pan_sign_x(&app), 1.0);
+        set(&mut app, &json!({"pan_reverse_x": true})).unwrap();
+        assert_eq!(pan_sign_x(&app), -1.0);
+        let mut other = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        other.load_prefs(&app.prefs());
+        assert!(other.preferences.pan_reverse_x);
     }
 
     #[test]

@@ -1195,13 +1195,6 @@ where
                 return Ok(Some(body));
             }
         }
-        // An implausible empty result from the unshifted numerical tries must still give
-        // the exact local strategies above a chance (#1765). If neither recovers it, keep
-        // that original candidate for the outer guard, without enabling displaced retries.
-        if empty_votes >= 2 && op != BoolOp::Union {
-            merge(empty_diagnostics);
-            return Ok(None);
-        }
         // A whole turn of a cylinder or cone bounded by one wire along its seam (as STEP files
         // write them) can't be divided by a loop lying inside it, and the tries below end in a
         // nudged tool, or fail: the same boolean with such faces in two halves, which is exact.
@@ -1213,6 +1206,13 @@ where
                 merge(diagnostics);
                 return Ok(r);
             }
+        }
+        // An implausible empty result from the unshifted numerical tries must still give
+        // the exact strategies above a chance (#1765), including seam-face recovery. If none
+        // recovers it, keep the original candidate for the outer guard, before displaced retries.
+        if empty_votes >= 2 && op != BoolOp::Union {
+            merge(empty_diagnostics);
+            return Ok(None);
         }
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {

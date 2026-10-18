@@ -138,6 +138,10 @@ the most complete description of the house style.
 | UI scenarios | `crates/ui-egui/tests/scenarios/*.json` | part of `cargo test` |
 | Reference tests | `cargo xtask oracle` | `tests/oracle/` (see below) |
 
+A geometry change that changes the robustness goldens re-records them in the same pull request:
+`ROBUSTNESS_GOLDENS_BLESS="why it changed" cargo test --profile ci -p solidcraft-engine --lib robustness_goldens::`
+(see [docs/robustness.md](docs/robustness.md)); CI runs every seed on pull requests that touch geometry.
+
 **UI scenarios** drive the real app headless: start a tool, click a plane or a sketch point,
 press keys, then assert on the result.
 
@@ -258,6 +262,10 @@ and a fresh CI run:
      open a **draft** PR titled `<summary> (#N)`, e.g. `Fillet: variable radius along a chain (#123)`.
    - **The lowest-numbered open PR for an issue wins.** If yours lost, close it (or offer to help
      on the other one).
+   - The bot records the claim when the PR is opened: it assigns you, adds `in progress` and
+     says so on the issue. It reads `#N` in the PR title and `Fixes #N` in the body. If someone
+     already holds the issue, or an older open PR references it, it says so on your PR instead.
+   - Want to stake a claim before you have a branch? Comment `/claim` on the issue (below).
    - Push work in progress at least daily. A draft with no pushes for 72 hours may be taken over:
      comment on it first, then open your own claim.
    - Mark the PR ready for review when it is done.
@@ -267,10 +275,11 @@ and a fresh CI run:
 4. Reference the issue (`Fixes #12`). In the PR, say what you tested and how. For geometry work, include the measured numbers (and
    the expected ones).
 
-Comment `/claim` on an issue to take it: you are assigned, it gets the `in progress` label, and
-the bot replies with the deadline. Open a draft PR referencing the issue within 72 hours, or the
-claim lapses and the issue is freed again; a claim with a PR is freed after 14 days without
-pushes. `/unclaim` releases it early (only you or a maintainer can). Issues a maintainer has
+Commenting `/claim` assigns you, adds the `in progress` label, and replies with its automatic cleanup
+deadline. It frees a claim with no linked PR after 72 hours, or a claim with a PR after 14 days
+without pushes. These automatic cleanup deadlines are separate from the daily progress and
+72-hour takeover policy above. A draft PR that references the issue claims it the same way.
+`/unclaim` releases the bot claim early (only you or a maintainer can). Issues a maintainer has
 taken are never freed automatically.
 
 Help reviewers see what the words mean. For observable CAD, UI or model behavior, please
@@ -298,6 +307,27 @@ Much of SolidCraft so far was written by AI coding agents (Claude) working in pa
 owning one area, with a human setting direction and reporting bugs. Their working notes are in
 [AGENTS.md](AGENTS.md). Human contributors are just as welcome. Use whatever tools you like, as
 long as the change meets the rules above.
+
+## Labels and triage
+
+The triage bot labels every new issue and PR (`.github/workflows/triage.yml`). It only adds labels;
+correct them freely and it won't put them back.
+
+- **PRs** get `area:*` from the paths they change (`crates/kernel` and `crates/geom` →
+  `area:kernel`, `crates/ui-egui` and the apps → `area:ui`, `.github/`, `scripts/`, `docs/` →
+  `area:infra`, and so on).
+- **Issues** get `bug` (in-app reports and the bug template), `enhancement` (feature requests),
+  `priority:P1` for crashes, and an `area:*` from the title or the reported command. Until it has
+  a priority, an issue carries `needs-triage`; setting a priority removes it.
+- **Maintainers** comment `/triage area:kernel P1` (any existing label; `P0`–`P3` for a
+  priority, which replaces the old one; `-label` removes one) to sort an issue or PR.
+- **Short bug reports without steps to reproduce** get `needs-info` and one comment asking for
+  the steps (and the version, when it's missing). An app report that arrived empty is asked to
+  paste the report the app copied to the clipboard. The reporter's reply, or an edit that adds the
+  steps, removes the label; an issue that stays in `needs-info` for 14 days is closed, and can be
+  reopened any time. Feature requests, app reports with their details, and maintainers' issues
+  are never asked.
+- `needs-triage` is the queue: [open issues with it](https://github.com/tangency-labs/solidcraft/issues?q=is%3Aopen+label%3Aneeds-triage).
 
 ## Where help is wanted most
 

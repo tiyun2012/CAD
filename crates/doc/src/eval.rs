@@ -1764,8 +1764,9 @@ fn apply_traced(state: &mut ModelState, f: &Feature, tools: Vec<Traced>, op: Ope
         Operation::Cut | Operation::Intersect => {
             let bop = if op == Operation::Cut { BoolOp::Cut } else { BoolOp::Intersect };
             let tools = if op == Operation::Cut { clear_tools_as_one(tools) } else { tools };
-            let affected: std::collections::BTreeSet<String> =
-                target_idx.iter().filter_map(|i| state.bodies.get(*i).map(|b| b.name.clone())).collect();
+            // Each target's pieces before the cut: a body joined from separate pieces stays one.
+            let affected: std::collections::BTreeMap<String, usize> =
+                target_idx.iter().filter_map(|i| state.bodies.get(*i)).map(|b| (b.name.clone(), b.body.lumps().map_or(1, |l| l.len()))).collect();
             let mut remove = Vec::new();
             for &ti in &target_idx {
                 let Some(mut acc) = state.bodies.get(ti).map(|b| Some(b.traced())) else { continue };
@@ -1793,16 +1794,19 @@ fn apply_traced(state: &mut ModelState, f: &Feature, tools: Vec<Traced>, op: Ope
             let live: std::collections::BTreeSet<&str> = state.bodies.iter().map(|b| b.name.as_str()).collect();
             state.threads.retain(|t| live.contains(t.body.as_str()));
             // A cut can leave a body in pieces: each piece becomes its own body ("Bar", "Bar (1)"),
-            // numbered on past names already taken (a body cut in pieces before).
+            // numbered on past names already taken (a body cut in pieces before). Only a cut that
+            // made more pieces than the body had splits it: the pieces of a join stay together.
+            // Not yet: a cut that splits one piece of such a body still splits all of them; keeping
+            // the untouched ones together needs each new piece traced to the piece it came from.
             let mut taken: std::collections::BTreeSet<String> = state.bodies.iter().map(|b| b.name.clone()).collect();
             let mut split: Vec<ModelBody> = Vec::new();
             for mb in std::mem::take(&mut state.bodies) {
-                if !affected.contains(&mb.name) || state.sheets.iter().any(|s| s.body == mb.name) {
+                let Some(&had) = affected.get(&mb.name).filter(|_| !state.sheets.iter().any(|s| s.body == mb.name)) else {
                     split.push(mb);
                     continue;
-                }
+                };
                 let pieces = mb.body.lumps().unwrap_or_else(|_| vec![mb.body.clone()]);
-                if pieces.len() < 2 {
+                if pieces.len() <= had {
                     split.push(mb);
                     continue;
                 }
@@ -3079,7 +3083,8 @@ fn centered_extrude(plane: &Plane, region: &Region2, start: f64, end: f64, sketc
     };
     // Fit cap surfaces in their own coordinates. Fitting a distant world-space
     // wire can tilt an otherwise exact planar cap through numeric cancellation.
-    let bodies = kernel::extrude(&Plane::XY, std::slice::from_ref(region), start, end)?;
+    // A side drawn in collinear pieces is one face (#1788).
+    let bodies = kernel::extrude_whole_sides(&Plane::XY, std::slice::from_ref(region), start, end)?;
     if *plane == Plane::XY {
         return Ok(bodies.into_iter().map(|body| roles.tool(body, None)).collect());
     }
@@ -3190,21 +3195,30 @@ fn feature_tools_with_constructor(
             };
             if let Some(tp) = &extent.taper {
                 let taper = val(vals, tp, Kind::Angle)?;
-                if extent.distance2.is_some() || extent.start_offset.is_some() || extent.direction == crate::Direction::Symmetric {
-                    return Err(DocError::Invalid("not supported yet: taper with two-sided, symmetric or offset extents".into()));
+                if extent.distance2.is_some() || extent.direction == crate::Direction::Symmetric {
+                    return Err(DocError::Invalid("not supported yet: taper with two-sided or symmetric extents".into()));
                 }
                 let sign = if extent.to.is_none() && extent.direction == crate::Direction::Negative { -1.0 } else { 1.0 };
                 let (len, sign) = if d < 0.0 { (-d, -sign) } else { (d, sign) };
-                let start_plane = ss.plane.offset(from);
+                // Where the extrude starts: the From Object's level and a start offset along the
+                // normal from it. The offset moves the profile that far and the sides are drafted
+                // from there, so the profile stays the section at the start whatever the offset
+                // (`d` is measured from the start already, To Object included).
+                let base = from
+                    + match &extent.start_offset {
+                        Some(e) => val(vals, e, Kind::Length)?,
+                        None => 0.0,
+                    };
+                let start_plane = ss.plane.offset(base);
                 let caps = [
-                    Some(crate::lineage::extrude_cap_role(from)),
-                    Some(crate::lineage::extrude_cap_role(if sign < 0.0 { from - len } else { from + len })),
+                    Some(crate::lineage::extrude_cap_role(base)),
+                    Some(crate::lineage::extrude_cap_role(if sign < 0.0 { base - len } else { base + len })),
                 ];
                 // How far a tool grows past its profile at either end, at most.
                 let mut growth: f64 = 0.0;
                 // A face of the targets in the profile's plane (the same for every profile).
                 let plain_targets: Vec<String> = crate::plain(targets);
-                let on_face = matches!(operation, Operation::Join | Operation::Cut) && face_level_at(st, &ss.plane, from, &plain_targets);
+                let on_face = matches!(operation, Operation::Join | Operation::Cut) && face_level_at(st, &ss.plane, base, &plain_targets);
                 let surroundings = Surroundings::of(st, *operation, &plain_targets);
                 let tools: Vec<Traced> = regions
                     .iter()
@@ -3228,9 +3242,9 @@ fn feature_tools_with_constructor(
                             growth = growth.max(len * taper.tan().abs());
                             return Ok(roles.tool(exact, None));
                         }
-                        let (lo, hi) = if sign < 0.0 { (from - len, from) } else { (from, from + len) };
+                        let (lo, hi) = if sign < 0.0 { (base - len, base) } else { (base, base + len) };
                         let (l2, h2) = surroundings.as_ref().map_or((lo, hi), |sur| extend_for_coplanar(sur, &ss.plane, r, lo, hi));
-                        let (mut a, b) = if sign < 0.0 { (from - h2, from - l2) } else { (l2 - from, h2 - from) };
+                        let (mut a, b) = if sign < 0.0 { (base - h2, base - l2) } else { (l2 - base, h2 - base) };
                         // A taper that narrows the tool away from the face widens it as it runs on into it, past
                         // the profile (where the profile is the whole face, out through the body's sides, #1534):
                         // then it starts on the face instead.

@@ -50,6 +50,8 @@ pub fn tip() -> String {
 pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     poll(app, &ctx);
+    // Set again below if the chat is drawn this frame.
+    app.agent_chat.drop_rect = None;
     // With AI features off nothing of the chat is drawn, and the shortcut does nothing.
     if !shown(app) {
         return;
@@ -57,6 +59,10 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     super::settings::dialog(app, &ctx);
     if ctx.input_mut(|i| i.consume_shortcut(&SHORTCUT)) {
         toggle(app);
+    }
+    // A window that isn't drawn this frame closes; the next one opens at the saved place.
+    if !(app.agent_chat.open && app.preferences.agent_chat_popped) {
+        app.agent_chat.window_placed = false;
     }
     // New chat, when the chat has focus (its input, or the pointer over the panel).
     let in_chat = ctx.memory(|m| m.has_focus(Id::new("sc_agent_chat_input")))
@@ -72,11 +78,22 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     if app.agent_chat.detection.is_none() && app.agent_chat.detecting.is_none() {
         refresh(app, &ctx);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.preferences.agent_chat_popped {
+        window(app, &ctx);
+        return;
+    }
     let t = Tokens::get();
     let left = app.preferences.agent_chat_side == "left";
     let side = |id: Id| if left { egui::Panel::left(id) } else { egui::Panel::right(id) };
     if app.preferences.agent_chat_minimized {
-        side(Id::new("sc_agent_chat_strip")).exact_size(STRIP).resizable(false).frame(egui::Frame::NONE.fill(t.panel)).show(ui, |ui| strip(app, ui));
+        let r = side(Id::new("sc_agent_chat_strip"))
+            .exact_size(STRIP)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(t.panel))
+            .show(ui, |ui| strip(app, ui));
+        app.agent_chat.drop_rect = Some(r.response.rect);
+        show_drop_hint(app, &ctx);
         return;
     }
     let width = app.preferences.agent_chat_width.clamp(MIN_WIDTH, MAX_WIDTH);
@@ -88,10 +105,39 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         .show(ui, |ui| body(app, ui, left));
     crate::scenario::publish_rect("agent_chat:panel", r.response.rect);
     app.agent_chat.panel_rect = Some(r.response.rect);
+    app.agent_chat.drop_rect = Some(r.response.rect);
+    show_drop_hint(app, &ctx);
     let w = r.response.rect.width();
     if w.is_finite() && (MIN_WIDTH..=MAX_WIDTH).contains(&w) {
         app.preferences.agent_chat_width = w;
     }
+}
+
+/// While files are dragged over the window: if they would drop on the chat, say so over it.
+fn show_drop_hint(app: &SolveApp, ctx: &egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(rect) = app.agent_chat.drop_rect
+        && ctx.input(|i| !i.raw.hovered_files.is_empty())
+        && drop_is_ours(app, ctx)
+    {
+        drop_hint(ctx, rect);
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (app, ctx);
+}
+
+/// Where dragged files will go: a tinted zone over the chat with a line of text.
+#[cfg(not(target_arch = "wasm32"))]
+fn drop_hint(ctx: &egui::Context, area: Rect) {
+    let t = Tokens::get();
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::new("sc_agent_chat_drop_hint")));
+    let zone = area.shrink(6.0);
+    painter.rect(zone, 10.0, t.accent.gamma_multiply(0.16), Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
+    let font = egui::FontId::proportional(14.0);
+    let text = painter.layout(tr("ui.agent_chat_drop_hint").to_string(), font, t.text, (zone.width() - 24.0).max(40.0));
+    let at = zone.center() - text.size() / 2.0;
+    painter.galley(at, text, t.text);
+    crate::scenario::publish_rect("agent_chat:drop_hint", zone);
 }
 
 /// New chat (when the chat has focus).
@@ -107,7 +153,78 @@ fn request_new_chat(app: &mut SolveApp) {
     }
 }
 
-/// A small drawn button: `kind` is `minimize`, `close`, `stopturn` or `expand`.
+/// A saved window place (`[x, y, width, height]`) that can be used: finite, a usable size, and
+/// not absurdly far away. `x` and `y` may be negative: a screen left of or above the main one.
+pub fn window_place(saved: Option<[f32; 4]>) -> Option<([f32; 2], [f32; 2])> {
+    let [x, y, w, h] = saved?;
+    let usable = [x, y, w, h].iter().all(|v| v.is_finite())
+        && (MIN_WIDTH..=10_000.0).contains(&w)
+        && (200.0..=10_000.0).contains(&h)
+        && x.abs() <= 100_000.0
+        && y.abs() <= 100_000.0;
+    usable.then_some(([x, y], [w, h]))
+}
+
+/// The chat window's settings. The saved place and size go only to a window that is opening:
+/// egui turns a changed place into a move, and the system rounds what it is given, so giving it
+/// every frame made the window chase its own rounding (it shook a pixel up and down).
+pub fn window_builder(app: &SolveApp) -> egui::ViewportBuilder {
+    let title = format!("{} — {}", app.session.doc.name, tr("ui.agent_chat"));
+    let builder = egui::ViewportBuilder::default().with_title(title).with_min_inner_size([MIN_WIDTH, 320.0]);
+    if app.agent_chat.window_placed {
+        return builder;
+    }
+    match window_place(app.preferences.agent_chat_window) {
+        Some((pos, size)) => builder.with_position(pos).with_inner_size(size),
+        None => builder.with_inner_size([app.preferences.agent_chat_width.clamp(MIN_WIDTH, MAX_WIDTH), 720.0]),
+    }
+}
+
+/// The chat in its own window, named after the design: a native window on the desktop, which can
+/// go to another screen, or a window floating inside the app where the system can't open one.
+/// The system's close button closes the chat (it opens there again); Dock puts it back.
+#[cfg(not(target_arch = "wasm32"))]
+fn window(app: &mut SolveApp, ctx: &egui::Context) {
+    let builder = window_builder(app);
+    app.agent_chat.window_placed = true;
+    // The side panel isn't drawn: its place no longer counts as "in the chat".
+    app.agent_chat.panel_rect = None;
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("sc_agent_chat_window"), builder, |ui, class| {
+        let t = Tokens::get();
+        let frame = egui::Frame::NONE.fill(t.panel).inner_margin(egui::Margin::symmetric(8, 6));
+        let r = egui::CentralPanel::default().frame(frame).show(ui, |ui| body(app, ui, false));
+        if class == egui::ViewportClass::EmbeddedWindow {
+            // Floating inside the app: its handles are the main window's, as the panel's are.
+            crate::scenario::publish_rect("agent_chat:window", r.response.rect);
+            app.agent_chat.panel_rect = Some(r.response.rect);
+            return;
+        }
+        let ctx = ui.ctx().clone();
+        if ctx.input_mut(|i| i.consume_shortcut(&SHORTCUT)) {
+            toggle(app);
+        }
+        // The whole window is the chat, so New chat works anywhere in it.
+        if ctx.input_mut(|i| i.consume_shortcut(&NEW_CHAT_SHORTCUT)) {
+            request_new_chat(app);
+        }
+        let (outer, inner, close) = ctx.input(|i| (i.viewport().outer_rect, i.viewport().inner_rect, i.viewport().close_requested()));
+        if let (Some(o), Some(n)) = (outer, inner) {
+            app.preferences.agent_chat_window = Some([o.min.x, o.min.y, n.width(), n.height()]);
+        }
+        if close {
+            app.agent_chat.open = false;
+        }
+    });
+}
+
+/// Whether the chat's own window should become active because the pointer is over its text box:
+/// only when it is in a window of its own that isn't active and the app's main window is (never
+/// taking the focus from another app).
+pub fn take_focus_for_text(popped: bool, over_text: bool, chat_active: Option<bool>, main_active: Option<bool>) -> bool {
+    popped && over_text && chat_active == Some(false) && main_active == Some(true)
+}
+
+/// A small drawn button: `kind` is `minimize`, `close`, `newchat`, `stopturn`, `pop_out` or `dock`.
 fn glyph_button(ui: &mut egui::Ui, kind: &str, tip: &str) -> egui::Response {
     let t = Tokens::get();
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
@@ -116,13 +233,29 @@ fn glyph_button(ui: &mut egui::Ui, kind: &str, tip: &str) -> egui::Response {
     }
     let c = r.center();
     let s = Stroke::new(1.4, t.text);
+    let p = ui.painter();
     match kind {
         "minimize" => {
-            ui.painter().line_segment([c + vec2(-5.0, 4.0), c + vec2(5.0, 4.0)], s);
+            p.line_segment([c + vec2(-5.0, 4.0), c + vec2(5.0, 4.0)], s);
         }
         "close" => {
-            ui.painter().line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], s);
-            ui.painter().line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], s);
+            p.line_segment([c + vec2(-4.5, -4.5), c + vec2(4.5, 4.5)], s);
+            p.line_segment([c + vec2(-4.5, 4.5), c + vec2(4.5, -4.5)], s);
+        }
+        // A window with an arrow leaving it by its top right corner.
+        "pop_out" => {
+            p.line_segment([c + vec2(-1.0, -5.0), c + vec2(-5.0, -5.0)], s);
+            p.line_segment([c + vec2(-5.0, -5.0), c + vec2(-5.0, 5.0)], s);
+            p.line_segment([c + vec2(-5.0, 5.0), c + vec2(5.0, 5.0)], s);
+            p.line_segment([c + vec2(5.0, 5.0), c + vec2(5.0, 1.0)], s);
+            p.line_segment([c + vec2(-1.0, 1.0), c + vec2(5.5, -5.5)], s);
+            p.line_segment([c + vec2(1.5, -5.5), c + vec2(5.5, -5.5)], s);
+            p.line_segment([c + vec2(5.5, -5.5), c + vec2(5.5, -1.5)], s);
+        }
+        // A window with its right side filled: the panel docked.
+        "dock" => {
+            p.rect_stroke(Rect::from_center_size(c, vec2(11.0, 10.0)), 1.0, s, egui::StrokeKind::Middle);
+            p.rect_filled(Rect::from_min_max(c + vec2(1.5, -5.0), c + vec2(5.5, 5.0)), 0.0, t.text);
         }
         "newchat" => {
             // A speech bubble with a plus.
@@ -179,16 +312,20 @@ fn strip(app: &mut SolveApp, ui: &mut egui::Ui) {
 }
 
 /// The header: a grip to drag the panel to the other side, the title and state, Connect or Stop,
-/// Minimise and Close.
+/// Pop out (or Dock, in its own window), Minimise and Close. In its own window the system moves
+/// and minimises it, so there is no grip and no Minimise.
 fn header(app: &mut SolveApp, ui: &mut egui::Ui, left: bool) {
     let t = Tokens::get();
     let state = app.agent_chat.state();
+    let popped = app.preferences.agent_chat_popped;
     ui.horizontal(|ui| {
         let title = {
-            let (grip, _) = ui.allocate_exact_size(vec2(10.0, 18.0), Sense::hover());
-            for row in 0..3 {
-                for col in 0..2 {
-                    ui.painter().circle_filled(grip.left_top() + vec2(2.5 + col as f32 * 5.0, 4.0 + row as f32 * 5.0), 1.1, t.text_dim);
+            let (grip, _) = ui.allocate_exact_size(vec2(if popped { 0.0 } else { 10.0 }, 18.0), Sense::hover());
+            if !popped {
+                for row in 0..3 {
+                    for col in 0..2 {
+                        ui.painter().circle_filled(grip.left_top() + vec2(2.5 + col as f32 * 5.0, 4.0 + row as f32 * 5.0), 1.1, t.text_dim);
+                    }
                 }
             }
             let l = ui.label(RichText::new(tr("ui.agent_chat")).strong().size(14.0));
@@ -203,14 +340,16 @@ fn header(app: &mut SolveApp, ui: &mut egui::Ui, left: bool) {
         }
         ui.label(RichText::new(s).color(state_color(state)).small());
         // Drag the header across the window to dock on the other side.
-        let drag = ui.interact(title, Id::new("sc_agent_chat_grip"), Sense::drag());
-        crate::scenario::publish_handle("agent_chat:grip", title.center());
-        dock_drag(app, ui, &drag, left);
+        if !popped {
+            let drag = ui.interact(title, Id::new("sc_agent_chat_grip"), Sense::drag());
+            crate::scenario::publish_handle("agent_chat:grip", title.center());
+            dock_drag(app, ui, &drag, left);
+        }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if glyph_button(ui, "close", tr("ui.agent_chat_close")).clicked() {
                 app.agent_chat.open = false;
             }
-            if glyph_button(ui, "minimize", tr("ui.agent_chat_minimize")).clicked() {
+            if !popped && glyph_button(ui, "minimize", tr("ui.agent_chat_minimize")).clicked() {
                 app.preferences.agent_chat_minimized = true;
             }
             #[cfg(not(target_arch = "wasm32"))]
@@ -222,6 +361,13 @@ fn header(app: &mut SolveApp, ui: &mut egui::Ui, left: bool) {
             .clicked()
             {
                 request_new_chat(app);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let (kind, tip) = if popped { ("dock", "ui.agent_chat_dock") } else { ("pop_out", "ui.agent_chat_pop_out") };
+                if glyph_button(ui, kind, tr(tip)).clicked() {
+                    app.preferences.agent_chat_popped = !popped;
+                }
             }
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -322,14 +468,16 @@ fn desktop_body(app: &mut SolveApp, ui: &mut egui::Ui) {
         auth_box(app, ui);
     }
     ui.separator();
-    // The input sits at the bottom; the conversation takes the rest.
-    let input_h = 92.0;
+    // The input sits at the bottom (with a row per line of file chips); the conversation takes
+    // the rest.
+    let input_h = 92.0 + chip_rows(app.agent_chat.files(), ui.available_width(), ui.spacing().item_spacing.x) as f32 * 32.0;
     let avail = (ui.available_height() - input_h).max(80.0);
     egui::ScrollArea::vertical().id_salt("sc_agent_chat_scroll").max_height(avail).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
         conversation(app, ui);
     });
     ui.separator();
     let busy = state == State::Busy;
+    attachment_chips(app, ui);
     let edit = egui::TextEdit::multiline(&mut app.agent_chat.input)
         .hint_text(tr(if busy { "ui.agent_chat_placeholder_busy" } else { "ui.agent_chat_placeholder" }))
         .desired_rows(2)
@@ -345,14 +493,30 @@ fn desktop_body(app: &mut SolveApp, ui: &mut egui::Ui) {
     };
     let r = ui.add(edit);
     crate::scenario::publish_rect("agent_chat:input", r.rect);
+    // macOS shows a window's cursors only while it is the active window: over the text box of a
+    // chat window that isn't, the pointer stays an arrow. Coming from the main window, the chat
+    // window becomes active, so the text cursor shows and the first click places the caret.
+    let (chat_active, main_active) = (ui.ctx().input(|i| i.viewport().focused), ui.ctx().input_for(egui::ViewportId::ROOT, |i| i.viewport().focused));
+    if take_focus_for_text(app.preferences.agent_chat_popped, r.hovered(), chat_active, main_active) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
     let enter = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
     if esc {
         cancel(app);
     }
     ui.horizontal(|ui| {
-        let send_b = ui.button(tr(if busy { "ui.agent_chat_queue" } else { "ui.agent_chat_send" }));
+        add_menu(app, ui);
+        // A message waits for files still being read.
+        let reading = !app.agent_chat.loading.is_empty();
+        let send_b = ui
+            .add_enabled(!reading, egui::Button::new(tr(if busy { "ui.agent_chat_queue" } else { "ui.agent_chat_send" })))
+            .on_disabled_hover_text(tr("ui.agent_chat_files_loading"));
         crate::scenario::publish_handle("agent_chat:send", send_b.rect.center());
-        if (send_b.clicked() || enter || steer) && !app.agent_chat.input.trim().is_empty() {
+        // Files alone make a message.
+        let something = !app.agent_chat.input.trim().is_empty() || !app.agent_chat.attachments.is_empty();
+        if reading {
+            // Enter waits with the button.
+        } else if (send_b.clicked() || enter || steer) && something {
             let text = std::mem::take(&mut app.agent_chat.input).trim_end_matches('\n').to_string();
             send(app, ui.ctx(), text);
             if steer {
@@ -628,14 +792,17 @@ fn conversation(app: &mut SolveApp, ui: &mut egui::Ui) {
     let current_doc = app.session.doc.clone();
     for (n, item) in app.agent_chat.items.iter().enumerate() {
         match item {
-            Item::User { text, image } => {
+            Item::User { text, image, files } => {
                 ui.add_space(6.0);
                 egui::Frame::NONE.fill(t.accent_soft).corner_radius(6.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    ui.add(egui::Label::new(RichText::new(text).color(t.text)).selectable(true).wrap());
+                    if !text.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(text).color(t.text)).selectable(true).wrap());
+                    }
                     if *image {
                         ui.label(RichText::new(tr("ui.agent_chat_view_attached")).color(t.text_dim).size(11.0));
                     }
+                    files_line(ui, files.iter().map(String::as_str));
                 });
             }
             Item::Agent { thought, text } => {
@@ -784,10 +951,13 @@ fn conversation(app: &mut SolveApp, ui: &mut egui::Ui) {
                     });
                 }
                 _ => {
-                    ui.add(egui::Label::new(RichText::new(&p.text).color(t.text)).selectable(true).wrap());
+                    if !p.text.is_empty() {
+                        ui.add(egui::Label::new(RichText::new(&p.text).color(t.text)).selectable(true).wrap());
+                    }
                     if p.image {
                         ui.label(RichText::new(tr("ui.agent_chat_view_attached")).color(t.text_dim).size(11.0));
                     }
+                    files_line(ui, p.files.iter().map(|f| f.name.as_str()));
                 }
             }
         });
@@ -841,6 +1011,199 @@ fn conversation(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     if let Some(n) = undo {
         undo_changes(app, n);
+    }
+}
+
+/// The files that went (or will go) with a message, by name.
+#[cfg(not(target_arch = "wasm32"))]
+fn files_line<'a>(ui: &mut egui::Ui, names: impl Iterator<Item = &'a str>) {
+    let list = names.collect::<Vec<_>>().join(", ");
+    if !list.is_empty() {
+        let t = Tokens::get();
+        ui.add(egui::Label::new(RichText::new(trf("ui.agent_chat_files", &[("files", &list)])).color(t.text_dim).size(11.0)).wrap());
+    }
+}
+
+/// The widest a file chip gets; a narrower chat makes them narrower.
+const CHIP_W: f32 = 170.0;
+
+/// How many rows `n` chips take in a chat `avail` wide (`gap` between them).
+fn chip_rows(n: usize, avail: f32, gap: f32) -> usize {
+    let avail = avail.max(1.0);
+    let per_row = (((avail + gap) / (CHIP_W.min(avail) + gap)).floor() as usize).max(1);
+    n.div_ceil(per_row)
+}
+
+/// The files for the next message, as chips in rows that fit the chat: a picture's thumbnail (or
+/// a file mark), the name cut to fit, and a × that takes the file off. Laid out by hand: egui
+/// wraps plain widgets, not framed groups, and one row wider than the chat widens all below it.
+#[cfg(not(target_arch = "wasm32"))]
+fn attachment_chips(app: &mut SolveApp, ui: &mut egui::Ui) {
+    let chat = &mut app.agent_chat;
+    // Thumbnails of files no longer on the message are let go.
+    let keep: Vec<u64> = chat.attachments.iter().filter(|f| f.thumb.is_some()).map(|f| f.id).collect();
+    chat.thumbs.retain(|k, _| keep.contains(k));
+    if chat.files() == 0 {
+        return;
+    }
+    let gap = ui.spacing().item_spacing.x;
+    let avail = ui.available_width().max(1.0);
+    let w = CHIP_W.min(avail);
+    let per_row = (((avail + gap) / (w + gap)).floor() as usize).max(1);
+    let (mut remove, mut stop) = (None, None);
+    // The files read, then those still being read (each takes its place once it is done).
+    let read = chat.attachments.len();
+    let indices: Vec<usize> = (0..chat.files()).collect();
+    for row in indices.chunks(per_row) {
+        ui.horizontal(|ui| {
+            for &i in row {
+                if let Some(f) = chat.attachments.get(i) {
+                    if chip(ui, &mut chat.thumbs, f, i, w) {
+                        remove = Some(i);
+                    }
+                } else if let Some(l) = chat.loading.get(i - read)
+                    && loading_chip(ui, &l.name, l.importing(), i - read, w)
+                {
+                    stop = Some(i - read);
+                }
+            }
+        });
+    }
+    if let Some(i) = remove
+        && i < chat.attachments.len()
+    {
+        chat.attachments.remove(i);
+    }
+    // Taken off while it is read: its reader's answer is dropped with it.
+    if let Some(i) = stop
+        && i < chat.loading.len()
+    {
+        chat.loading.remove(i);
+    }
+}
+
+/// What a chip's × says: an imported part stays in the design when it comes off the message.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn remove_tip(f: &attach::Attachment) -> &'static str {
+    tr(if matches!(f.content, attach::Content::Imported) { "ui.agent_chat_remove_imported" } else { "ui.agent_chat_remove_file" })
+}
+
+/// The chip of a file still being read or imported: a spinner, the name, and a × that takes it
+/// off (an import goes on: its part lands in the design).
+#[cfg(not(target_arch = "wasm32"))]
+fn loading_chip(ui: &mut egui::Ui, name: &str, importing: bool, i: usize, w: f32) -> bool {
+    let t = Tokens::get();
+    let mut clicked = false;
+    let r = egui::Frame::NONE.fill(t.toolbar).stroke(Stroke::new(1.0, t.border)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(4, 3)).show(
+        ui,
+        |ui| {
+            let inner = (w - 10.0).max(40.0);
+            ui.set_width(inner);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let doing = tr(if importing { "ui.agent_chat_file_importing" } else { "ui.agent_chat_file_loading" });
+                let mark = ui.add(egui::Spinner::new().size(16.0)).on_hover_text(doing).rect.width();
+                let name_w = (inner - mark - 18.0 - 8.0).max(8.0);
+                ui.allocate_ui(vec2(name_w, 20.0), |ui| {
+                    ui.set_width(name_w);
+                    ui.add(egui::Label::new(RichText::new(name).size(11.5).color(t.text_dim)).truncate())
+                })
+                .inner
+                .on_hover_text(name);
+                let (r, x) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                let c = r.center();
+                let s = Stroke::new(1.3, if x.hovered() { t.text } else { t.text_dim });
+                ui.painter().line_segment([c + vec2(-3.5, -3.5), c + vec2(3.5, 3.5)], s);
+                ui.painter().line_segment([c + vec2(-3.5, 3.5), c + vec2(3.5, -3.5)], s);
+                crate::scenario::publish_handle(&format!("agent_chat:file_loading_remove:{i}"), c);
+                clicked = x.on_hover_text(tr(if importing { "ui.agent_chat_remove_imported" } else { "ui.agent_chat_remove_file" })).clicked();
+            });
+        },
+    );
+    crate::scenario::publish_handle(&format!("agent_chat:file_loading:{i}"), r.response.rect.center());
+    clicked
+}
+
+/// One file chip, `w` wide in all; true when its × was clicked.
+#[cfg(not(target_arch = "wasm32"))]
+fn chip(ui: &mut egui::Ui, thumbs: &mut std::collections::HashMap<u64, egui::TextureHandle>, f: &attach::Attachment, i: usize, w: f32) -> bool {
+    let t = Tokens::get();
+    let mut clicked = false;
+    let r = egui::Frame::NONE.fill(t.toolbar).stroke(Stroke::new(1.0, t.border)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(4, 3)).show(
+        ui,
+        |ui| {
+            let inner = (w - 10.0).max(40.0);
+            ui.set_width(inner);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let mark = match &f.thumb {
+                    Some(img) => {
+                        let tex = thumbs
+                            .entry(f.id)
+                            .or_insert_with(|| ui.ctx().load_texture(format!("sc_attach_{}", f.id), (**img).clone(), egui::TextureOptions::LINEAR));
+                        let size = tex.size_vec2();
+                        ui.image((tex.id(), size * (22.0 / size.x.max(size.y).max(1.0)))).rect.width()
+                    }
+                    None => {
+                        let (r, _) = ui.allocate_exact_size(vec2(16.0, 20.0), Sense::hover());
+                        ui.painter().rect_stroke(r.shrink2(vec2(2.0, 3.0)), 2.0, Stroke::new(1.2, t.text_dim), egui::StrokeKind::Inside);
+                        r.width()
+                    }
+                };
+                let name_w = (inner - mark - 18.0 - 8.0).max(8.0);
+                ui.allocate_ui(vec2(name_w, 20.0), |ui| {
+                    ui.set_width(name_w);
+                    ui.add(egui::Label::new(RichText::new(&f.name).size(11.5)).truncate())
+                })
+                .inner
+                .on_hover_text(&f.name);
+                let (r, x) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                let c = r.center();
+                let s = Stroke::new(1.3, if x.hovered() { t.text } else { t.text_dim });
+                ui.painter().line_segment([c + vec2(-3.5, -3.5), c + vec2(3.5, 3.5)], s);
+                ui.painter().line_segment([c + vec2(-3.5, 3.5), c + vec2(3.5, -3.5)], s);
+                crate::scenario::publish_handle(&format!("agent_chat:file_remove:{i}"), c);
+                clicked = x.on_hover_text(remove_tip(f)).clicked();
+            });
+        },
+    );
+    crate::scenario::publish_rect(&format!("agent_chat:file:{i}"), r.response.rect);
+    crate::scenario::publish_handle(&format!("agent_chat:file:{i}"), r.response.rect.center());
+    clicked
+}
+
+/// The + button: choose a file with the app's picker (pictures, text and CAD files), or paste
+/// the clipboard's picture.
+#[cfg(not(target_arch = "wasm32"))]
+fn add_menu(app: &mut SolveApp, ui: &mut egui::Ui) {
+    let (mut choose, mut paste) = (false, false);
+    let r = ui.menu_button(RichText::new("+").strong().size(15.0), |ui| {
+        let a = ui.button(tr("ui.agent_chat_add_file"));
+        crate::scenario::publish_handle("agent_chat:add_file", a.rect.center());
+        let b = ui.button(tr("ui.agent_chat_paste_picture"));
+        crate::scenario::publish_handle("agent_chat:paste_picture", b.rect.center());
+        if a.clicked() {
+            choose = true;
+            ui.close();
+        }
+        if b.clicked() {
+            paste = true;
+            ui.close();
+        }
+    });
+    crate::scenario::publish_handle("agent_chat:add", r.response.rect.center());
+    r.response.on_hover_text(tr("ui.agent_chat_add"));
+    if choose {
+        app.pick_file(tr("ui.agent_chat_attachable"), &attach::extensions(), |app, path| {
+            if let Some(path) = path
+                && let Err(e) = attach_path(app, &path)
+            {
+                app.agent_chat.notice(e, true);
+            }
+        });
+    }
+    if paste && let Err(e) = paste_picture(app) {
+        app.agent_chat.notice(e, true);
     }
 }
 

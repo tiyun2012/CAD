@@ -3,7 +3,7 @@
 //! the exact rounding and ray classification of the original design are not available.
 
 use super::*;
-use crate::{box_solid, cylinder, fillet, measure, sphere};
+use crate::{box_solid, cylinder, fillet, measure, sphere, step_export, step_import};
 use std::cell::Cell;
 use std::f64::consts::PI;
 
@@ -30,6 +30,38 @@ fn shallow_cut_after_a_pocket_recovers_from_empty_numerical_attempts() {
     let actual = measure(&cut).unwrap().volume;
     assert!((actual - expected).abs() < 0.02, "{actual} vs {expected}");
     assert!(diagnostics.events.iter().all(|e| e.strategy != BooleanStrategy::RefinedTolerance));
+}
+
+#[test]
+fn step_seam_cut_recovers_from_empty_numerical_attempts() {
+    let pin = cylinder(Vec3::new(-5.0, 0.0, 0.0), Vec3::X, 4.5, 10.0).unwrap();
+    let target = step_import(&step_export(&[&pin], "seam regression").unwrap()).unwrap().bodies.remove(0).body;
+    let tool = sphere(Vec3::new(-5.0, 0.0, 0.0), 6.0).unwrap();
+    assert!(crate::seam_faces::needed(&target, &tool));
+    let attempts = Cell::new(0);
+    let shifted_attempts = Cell::new(0);
+    let empty = |_: &Body, _: &Body, _: BoolOp, shift: Option<mt::Vector3>, _: f64| {
+        attempts.set(attempts.get() + 1);
+        if shift.is_some() {
+            shifted_attempts.set(shifted_attempts.get() + 1);
+        }
+        Ok((Solid::new_unchecked(Vec::new()), None))
+    };
+    let (result, diagnostics) =
+        capture_boolean_diagnostics(|| boolean_via(&target, &tool, BoolOp::Cut, &|a, b, op| boolean_whole_with(a, b, op, false, &empty)));
+    assert!(attempts.get() >= 2, "the initial numerical tries must really have failed");
+    assert_eq!(shifted_attempts.get(), 0, "seam recovery must precede displaced retries");
+    let cut = result.unwrap().expect("the spherical cut leaves the end of the pin");
+    assert!(cut.validity().is_empty(), "{:?}", cut.validity());
+    assert_eq!(cut.lumps().unwrap().len(), 1);
+    assert!(cut.history().is_some());
+    // Along the common axis, integrate min(pi*4.5^2, pi*(6^2-x^2)) from 0 to 6.
+    let full_radius_end = (6.0_f64.powi(2) - 4.5_f64.powi(2)).sqrt();
+    let removed = PI * (4.5_f64.powi(2) * full_radius_end + 36.0 * (6.0 - full_radius_end) - (216.0 - full_radius_end.powi(3)) / 3.0);
+    let expected = PI * 4.5_f64.powi(2) * 10.0 - removed;
+    let actual = measure(&cut).unwrap().volume;
+    assert!((actual - expected).abs() < expected * 1e-3, "{actual} vs {expected}");
+    assert!(diagnostics.warning().is_none(), "{:?}", diagnostics.warning());
 }
 
 #[test]
