@@ -12,7 +12,7 @@ use solidcraft_engine::doc::{FeatureKind, ProfileSel};
 use solidcraft_engine::geom::Vec3;
 
 use crate::SolveApp;
-use crate::dialogs::{Dialog, Kind, combo, edge_sel, face_sel, field, profile_indices, row_label};
+use crate::dialogs::{Dialog, Kind, combo, edge_sel, face_sel, field, hint_field, profile_indices, row_label};
 use crate::selection::{AXES, BODIES, CURVES, EDGES, PLANAR_FACES, PROFILES, SelInput};
 use crate::theme::Tokens;
 
@@ -225,18 +225,14 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
                     combo(ui, "sm_pos", &POSITION_LABELS, position);
                     ui.end_row();
                     row_label(ui, "Bend Radius");
-                    let r = ui.add(egui::TextEdit::singleline(radius).hint_text(crate::i18n::tr_label("from the rule")));
-                    crate::params_dialog::complete(ui, &r, radius);
-                    enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    enter |= hint_field(ui, radius, crate::i18n::tr_label("from the rule"));
                     ui.end_row();
                     // The relief at the corners these flanges make: the rule's unless set here.
                     row_label(ui, "Corner Relief Shape");
                     combo(ui, "sm_flange_relief", &FLANGE_RELIEF_LABELS, relief);
                     ui.end_row();
                     row_label(ui, "Corner Relief");
-                    let r = ui.add(egui::TextEdit::singleline(relief_size).hint_text(crate::i18n::tr_label("from the rule")));
-                    crate::params_dialog::complete(ui, &r, relief_size);
-                    enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    enter |= hint_field(ui, relief_size, crate::i18n::tr_label("from the rule"));
                     ui.end_row();
                     // With several edges, a row for each: an angle and a height of its own, left
                     // empty for the values above (shown as the hints).
@@ -291,9 +287,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
             enter |= field(ui, length);
             ui.end_row();
             row_label(ui, "Gap");
-            let r = ui.add(egui::TextEdit::singleline(gap).hint_text(crate::i18n::tr_label("from the rule")));
-            crate::params_dialog::complete(ui, &r, gap);
-            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            enter |= hint_field(ui, gap, crate::i18n::tr_label("from the rule"));
             ui.end_row();
             row_label(ui, "Flip");
             ui.checkbox(flip, "");
@@ -307,9 +301,7 @@ pub fn rows(app: &mut SolveApp, ui: &mut egui::Ui, k: &mut Sm, inputs: &mut [Sel
             enter |= field(ui, angle);
             ui.end_row();
             row_label(ui, "Bend Radius");
-            let r = ui.add(egui::TextEdit::singleline(radius).hint_text(crate::i18n::tr_label("from the rule")));
-            crate::params_dialog::complete(ui, &r, radius);
-            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            enter |= hint_field(ui, radius, crate::i18n::tr_label("from the rule"));
             ui.end_row();
             row_label(ui, "Flip");
             ui.checkbox(flip, "");

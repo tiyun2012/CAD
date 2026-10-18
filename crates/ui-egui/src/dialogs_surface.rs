@@ -9,7 +9,7 @@ use solidcraft_engine::doc::{AxisRef, Direction, FaceAt, FeatureKind, Mat, Plane
 use solidcraft_engine::geom::Vec3;
 
 use crate::SolveApp;
-use crate::dialogs::{Kind, OP_LABELS, OPS, combo, field, op_index, row_label};
+use crate::dialogs::{Kind, OP_LABELS, OPS, combo, field, hint_field, op_index, row_label};
 use crate::selection::{AXES, BODIES, CURVES, EDGES, FACES, PLANES, PROFILES, SelInput, VERTICES};
 
 /// A surface tool dialog's values.
@@ -192,9 +192,7 @@ pub fn rows(ui: &mut egui::Ui, k: &mut Surf) -> bool {
     match k {
         Surf::Stitch { tolerance } => {
             row_label(ui, "Tolerance");
-            let r = ui.add(egui::TextEdit::singleline(tolerance).hint_text("tight"));
-            crate::params_dialog::complete(ui, &r, tolerance);
-            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            enter |= hint_field(ui, tolerance, "tight");
             ui.end_row();
         }
         Surf::Thicken { thickness, symmetric, operation } => {

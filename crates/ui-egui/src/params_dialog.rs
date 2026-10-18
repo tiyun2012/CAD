@@ -523,10 +523,11 @@ pub(crate) fn suggestions_for(ctx: &egui::Context, word: &str, explicit: bool) -
         .collect()
 }
 
-/// Offer keyboard and pointer completions under a focused expression box.
-/// Returns true when a suggestion was accepted; callers must not submit that frame.
+/// Offer keyboard and pointer completions under a focused expression box, and step a plain
+/// number in it with Up/Down or the wheel (`value_step`, #2320).
+/// Returns true when either changed the text; callers must not submit that frame.
 pub fn complete(ui: &mut egui::Ui, resp: &egui::Response, text: &mut String) -> bool {
-    crate::expression_complete::complete(ui, resp, text)
+    crate::expression_complete::complete(ui, resp, text) || crate::value_step::step(ui, resp, text)
 }
 
 #[cfg(test)]

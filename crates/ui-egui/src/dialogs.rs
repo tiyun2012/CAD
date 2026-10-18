@@ -1325,7 +1325,17 @@ fn plane_value(s: &Session, sel: Option<&Sel>) -> Option<Value> {
 
 /// A value field; true when Enter was pressed in it.
 pub(crate) fn field(ui: &mut egui::Ui, s: &mut String) -> bool {
-    let r = ui.text_edit_singleline(s);
+    hint_field(ui, s, "")
+}
+
+/// A value field showing `hint` while it is empty (what an empty value means, e.g. "from the
+/// rule"); true when Enter was pressed in it.
+pub(crate) fn hint_field(ui: &mut egui::Ui, s: &mut String, hint: &str) -> bool {
+    let mut edit = egui::TextEdit::singleline(s);
+    if !hint.is_empty() {
+        edit = edit.hint_text(hint.to_owned());
+    }
+    let r = ui.add(edit);
     publish_row(&r);
     crate::params_dialog::complete(ui, &r, s);
     r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -2739,9 +2749,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         enter |= field(ui, thickness);
                         ui.end_row();
                         row_label(ui, "Depth");
-                        let r = ui.add(egui::TextEdit::singleline(depth).hint_text(tr("to the next face")));
-                        crate::params_dialog::complete(ui, &r, depth);
-                        enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        enter |= hint_field(ui, depth, tr("to the next face"));
                         ui.end_row();
                         row_label(ui, "Flip");
                         ui.checkbox(flip, "");
@@ -2807,9 +2815,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         enter |= field(ui, diameter);
                         ui.end_row();
                         row_label(ui, "Wall");
-                        let r = ui.add(egui::TextEdit::singleline(wall).hint_text("solid"));
-                        crate::params_dialog::complete(ui, &r, wall);
-                        enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        enter |= hint_field(ui, wall, "solid");
                         ui.end_row();
                     }
                     Kind::Stock { margin } => {

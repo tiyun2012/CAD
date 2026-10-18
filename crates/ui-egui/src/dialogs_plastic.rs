@@ -145,11 +145,9 @@ pub fn start(app: &SolveApp, id: &str) -> Option<(Kind, Vec<SelInput>)> {
 fn opt_field(ui: &mut egui::Ui, label: &str, v: &mut String, unit: &str, hint: &str) -> bool {
     row_label(ui, label);
     let hint = format!("{unit}, {}", crate::i18n::tr_label(hint));
-    let r = ui.add(egui::TextEdit::singleline(v).hint_text(hint));
-    crate::dialogs::publish_row(&r);
-    crate::params_dialog::complete(ui, &r, v);
+    let enter = crate::dialogs::hint_field(ui, v, &hint);
     ui.end_row();
-    r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
+    enter
 }
 
 fn value_row(ui: &mut egui::Ui, label: &str, v: &mut String) -> bool {
