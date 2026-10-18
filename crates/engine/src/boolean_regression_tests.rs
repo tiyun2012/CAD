@@ -45,6 +45,49 @@ fn volume(s: &Session, body: &str) -> f64 {
     s.model.state().body(body).map(|b| solidcraft_kernel::measure(&b.body).unwrap().volume).unwrap_or(0.0)
 }
 
+/// #1985: the STEP export of a small enclosure never finished. The export reads its own file
+/// back, and meshing the screw hole's seam cylinder never ended: the boundary walk took
+/// projected angles millions of turns apart. The file is written, reads back cleanly, and holds
+/// the same solid.
+#[test]
+fn step_export_of_an_enclosure_with_a_screw_hole_finishes_and_reads_back() {
+    let s = replay(include_str!("../../../examples/regressions/step_export_screw_hole_enclosure.json"));
+    let state = s.model.state();
+    let body = &state.body("Unterteil").unwrap().body;
+    // 27 faces; the kernel splits each of the three whole turns (the hole, two standoffs) in two.
+    assert_eq!(body.face_count(), 30);
+    let (text, file_faces) = read_back(&s, body);
+    assert_eq!(text.matches("CYLINDRICAL_SURFACE(").count(), 7, "the seven round faces stay cylinders");
+    assert_eq!(file_faces, 27);
+}
+
+/// #1985, the reporter's second reproduction: the same walk on a standoff of a flanged
+/// enclosure without a screw hole.
+#[test]
+fn step_export_of_a_flanged_enclosure_finishes_and_reads_back() {
+    let s = replay(include_str!("../../../examples/regressions/step_export_flanged_enclosure.json"));
+    let state = s.model.state();
+    let (_, file_faces) = read_back(&s, &state.body("Unterteil").unwrap().body);
+    assert_eq!(file_faces, 29);
+}
+
+/// The body's STEP text, which reads back without warnings as one closed solid of the same
+/// volume and area, and the number of faces the file holds.
+fn read_back(s: &Session, body: &solidcraft_kernel::Body) -> (String, usize) {
+    assert!(s.model.results.iter().all(|r| r.error.is_none()), "{:?}", s.model.results);
+    let text = solidcraft_kernel::step_export(&[body], "SolidCraft").unwrap();
+    let imp = solidcraft_kernel::step_import(&text).unwrap();
+    assert!(imp.warnings.is_empty(), "{:?}", imp.warnings);
+    assert_eq!(imp.bodies.len(), 1);
+    let back = &imp.bodies[0];
+    assert!(back.closed);
+    let (a, b) = (solidcraft_kernel::measure(body).unwrap(), solidcraft_kernel::measure(&back.body).unwrap());
+    assert!((a.volume - b.volume).abs() < 1e-3 * a.volume, "volume {} read back as {}", a.volume, b.volume);
+    assert!((a.area - b.area).abs() < 1e-3 * a.area, "area {} read back as {}", a.area, b.area);
+    println!("#1985 volume {:.3} / {:.3} mm³; area {:.3} / {:.3} mm²", a.volume, b.volume, a.area, b.area);
+    (text, back.file_faces)
+}
+
 /// #2059: tabs exactly as wide as their supporting ribs share the ribs' side
 /// planes. The base's remote conical chamfer must not prevent their join.
 #[test]
