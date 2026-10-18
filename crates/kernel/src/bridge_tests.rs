@@ -242,3 +242,65 @@ fn continuity_parses_its_words() {
     assert_eq!(Continuity::parse(""), None);
     assert_eq!([Continuity::G0, Continuity::G1, Continuity::G2, Continuity::G3].map(Continuity::conditions), [1, 2, 3, 4]);
 }
+
+/// A radius-10 tube along z from `z0` to `z0 + 30`, turned `turn` radians about its axis (which
+/// moves where its rim's seam sits), with the end face at `open_at` taken off: a surface body
+/// whose rim there is a closed chain.
+fn open_tube(z0: f64, turn: f64, open_at: f64) -> Body {
+    let c = cylinder(Vec3::new(0.0, 0.0, z0), Vec3::Z, 10.0, 30.0).unwrap();
+    let c = crate::transform(&c, Vec3::ZERO, Vec3::ZERO, Vec3::Z, turn).unwrap();
+    let (_, rest) = crate::surfaces::unstitch(&c, &[Vec3::new(0.0, 0.0, open_at)]).unwrap();
+    rest.unwrap()
+}
+
+/// Points round a radius-10 rim at height `z`.
+fn rim_at(z: f64) -> Vec<Vec3> {
+    (0..8).map(|k| f64::from(k) * std::f64::consts::FRAC_PI_4 + 0.1).map(|a| Vec3::new(10.0 * a.cos(), 10.0 * a.sin(), z)).collect()
+}
+
+/// How far a blend between two coaxial rims turns round the axis: the most, over its stations,
+/// of the angle between where a cross-section starts and where it ends (zero for straight
+/// rulings parallel to the axis).
+fn worst_turn(body: &Body) -> f64 {
+    let grid = sample_grid(body, 33, 9).unwrap();
+    grid.iter()
+        .map(|row| {
+            let (a, b) = (row[0], row[row.len() - 1]);
+            angle_deg(Vec3::new(a.x, a.y, 0.0), Vec3::new(b.x, b.y, 0.0))
+        })
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn a_blend_between_closed_rims_lines_their_seams_up() {
+    // Two coaxial tubes 10 apart, the upper one turned a quarter round: its rim's seam is 90°
+    // from the lower rim's. The blend between them is the cylinder wall between: every ruling
+    // straight up the axis, none turning round it.
+    let low = open_tube(0.0, 0.0, 30.0);
+    let high = open_tube(40.0, std::f64::consts::FRAC_PI_2, 40.0);
+    for orders in [[Continuity::G0, Continuity::G0], [Continuity::G1, Continuity::G1], [Continuity::G2, Continuity::G2]] {
+        let (made, gap) = blend_between(&low, &rim_at(30.0), &high, &rim_at(40.0), orders, [0.0, 0.0], None, None, 65, false).unwrap();
+        let turn = worst_turn(&made);
+        // The boundary is a cubic through the stations on the rim: between them it strays by the
+        // interpolation error of a circle at 65 stations (about 2e-5 mm here).
+        assert!(gap < 1e-4, "{orders:?}: the boundary stays on the rims: {gap}");
+        assert!(turn < 0.1, "{orders:?}: the blend turns {turn}° round the axis");
+        // The wall between: radius 10 everywhere (G1 and G2 repeat a straight wall).
+        for row in sample_grid(&made, 17, 9).unwrap() {
+            for p in row {
+                assert!((Vec3::new(p.x, p.y, 0.0).len() - 10.0).abs() < 1e-5, "{orders:?}: off the wall at {p:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_closed_chain_blends_only_to_a_closed_chain() {
+    // The tube's closed rim against one open edge of a box's top.
+    let tube = open_tube(0.0, 0.0, 30.0);
+    let b = box_solid(Vec3::new(-20.0, 30.0, 30.0), Vec3::new(20.0, 40.0, 40.0)).unwrap();
+    let err = blend_between(&tube, &rim_at(30.0), &b, &[Vec3::new(0.0, 30.0, 40.0)], [Continuity::G1; 2], [0.0, 0.0], None, None, 33, false);
+    assert!(matches!(&err, Err(KernelError::Invalid(m)) if m.contains("closed chain")), "{err:?}");
+    let err = blend_between(&b, &[Vec3::new(0.0, 30.0, 40.0)], &tube, &rim_at(30.0), [Continuity::G1; 2], [0.0, 0.0], None, None, 33, false);
+    assert!(matches!(&err, Err(KernelError::Invalid(m)) if m.contains("closed chain")), "{err:?}");
+}

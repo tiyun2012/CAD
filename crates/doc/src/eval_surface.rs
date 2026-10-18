@@ -129,6 +129,7 @@ pub(super) fn eval(doc: &Document, vals: &BTreeMap<String, Value>, f: &Feature, 
                 *continuity,
                 *bulge,
                 align.map(|[p, q]| [p.0, q.0]),
+                None,
                 BLEND_STATIONS,
                 *stitch,
             )?;
