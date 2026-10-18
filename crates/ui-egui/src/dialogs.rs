@@ -1472,15 +1472,27 @@ const LABEL_W: f32 = 92.0;
 const LABEL_MAX_W: f32 = 150.0;
 
 /// A row label in the dialog's label column (the grid sizes the column to its widest label).
+/// A leading indent lines the row up under the one above: it is kept out of the lookup and
+/// put back in front of the translated text. The `ROW` handle keeps the original text.
 pub(crate) fn row_label(ui: &mut egui::Ui, text: &str) {
     ROW.with(|r| *r.borrow_mut() = text.to_string());
-    let display_text = tr(text);
-    let full = egui::WidgetText::from(display_text).into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body).size().x;
+    let display_text = indented_label(text);
+    let full = egui::WidgetText::from(display_text.as_str())
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body)
+        .size()
+        .x;
     let w = full.clamp(LABEL_W, LABEL_MAX_W);
     ui.allocate_ui_with_layout(vec2(w, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.set_width(w);
         ui.add(egui::Label::new(display_text).wrap());
     });
+}
+
+/// A row label as shown: the leading indent kept, the text itself translated (a nested row such
+/// as `"  Of"` lines up under the one above and still translates).
+pub(crate) fn indented_label(text: &str) -> String {
+    let indent = text.len() - text.trim_start().len();
+    format!("{}{}", &text[..indent], tr(&text[indent..]))
 }
 
 thread_local! {

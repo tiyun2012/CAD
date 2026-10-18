@@ -226,6 +226,7 @@ mod tests {
         assert_eq!(ids.first(), Some(&"en"));
         assert!(ids[1..].is_sorted(), "{ids:?}");
     }
+    use proc_macro2::{Delimiter, TokenStream, TokenTree};
     use std::collections::BTreeSet;
 
     fn placeholders(text: &str) -> BTreeSet<&str> {
@@ -376,6 +377,60 @@ mod tests {
                     assert!(ENGLISH.messages().contains_key(id), "missing English message: {id}");
                 }
             }
+        }
+    }
+
+    /// `label()` resolves a literal by its English text (or, failing that, an id), `text()` only
+    /// by id. A literal neither reaches is shown verbatim in every locale and nothing fails, so
+    /// every label and id literal the UI passes is read from the source and checked against the
+    /// English catalog. The source is tokenised with `proc-macro2`, so comments, raw strings,
+    /// escapes and test modules are handled, and calls inside macros count too.
+    #[test]
+    fn every_ui_label_literal_reaches_an_english_catalog_entry() {
+        let english: Messages = serde_json::from_str(ENGLISH.source).unwrap();
+        let ids: BTreeSet<&str> = english.keys().map(String::as_str).collect();
+        let texts: BTreeSet<&str> = english.values().filter(|text| !text.contains('{')).map(String::as_str).collect();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        source_files(&root, &mut files);
+        files.sort();
+        let mut missing: Vec<String> = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
+            for (literal, id_only) in literals(&source) {
+                // An empty literal is the blank spacer cell the dialogs lay out with
+                // `row_label(ui, "")`; there is nothing to translate and so no entry to want.
+                if literal.is_empty() {
+                    continue;
+                }
+                if !ids.contains(literal.as_str()) && (id_only || !texts.contains(literal.as_str())) {
+                    missing.push(format!("{shown}: `{literal}`"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "{} literal(s) would stay English in every locale because no English catalog entry reaches them:\n  {}",
+            missing.len(),
+            missing.join("\n  ")
+        );
+    }
+
+    /// The Preferences help line is assembled from catalog messages only now. It must read exactly
+    /// like the formula it replaced: the expected text uses the old literal snap hint, read from
+    /// nowhere, while only the shown side reads the catalog.
+    #[test]
+    fn navigation_help_comes_from_the_catalog_unchanged() {
+        const OLD_SNAP: &str = "; hold Shift during orbit to snap";
+        let english = Locale::for_language("en");
+        for preset in crate::prefs::NAV_PRESETS.iter().filter(|p| p.id != crate::prefs::TOUCHPAD_NAV) {
+            let openscad = preset.id == crate::prefs::OPENSCAD_NAV;
+            let expected_snap = if openscad { "" } else { OLD_SNAP };
+            let expected = format!("{}; Ctrl+left drag on empty space orbits{expected_snap}; hold Space to pan; the wheel zooms", preset.help);
+            let shown_snap = if openscad { "" } else { english.text("nav.help.snap") };
+            let id = format!("nav.{}.help", preset.id);
+            assert_eq!(english.format(&id, &[("snap", shown_snap)]), expected, "{id}");
         }
     }
 
@@ -661,5 +716,178 @@ mod tests {
             assert_eq!(tr("ui.preferences"), "環境設定");
         }
         assert_eq!(tr("ui.preferences"), "Preferences");
+    }
+
+    /// Every `.rs` file under `dir` except test modules (`*_tests.rs`, `tests.rs`).
+    fn source_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                source_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default();
+                if name != "tests.rs" && !name.ends_with("_tests.rs") {
+                    out.push(path);
+                }
+            }
+        }
+    }
+
+    /// Every label and id literal in `source` as `(text, id-only)`; `row_label`/`SelInput` indents trimmed.
+    fn literals(source: &str) -> Vec<(String, bool)> {
+        // A file the tokenizer refuses would otherwise pass unchecked.
+        let tokens = source.parse::<TokenStream>().expect("a UI source file tokenizes");
+        // Which `tr` the file means, read from its tokens (no comments) with the spacing removed.
+        let code: String = tokens.to_string().split_whitespace().collect();
+        let label_file = code.contains("fntr(text:&str)->&str") || code.contains("lettr=crate::i18n::tr_label;");
+        let id_file = code.contains("usecrate::i18n::tr;") || imports_i18n_tr(&code);
+        let mut out = Vec::new();
+        scan(tokens.into_iter().collect(), label_file, id_file, &mut out);
+        out
+    }
+
+    /// Walk `tokens`, recording each call's literal; recurse into groups and skip `#[cfg(test)]`.
+    fn scan(tokens: Vec<TokenTree>, label_file: bool, id_file: bool, out: &mut Vec<(String, bool)>) {
+        let mut i = 0;
+        while i < tokens.len() {
+            if cfg_test(&tokens, i) {
+                i = skip_item(&tokens, i + 2);
+                continue;
+            }
+            if let TokenTree::Ident(ident) = &tokens[i] {
+                match ident.to_string().as_str() {
+                    // The dialogs' own `tr` wraps `tr_label`; an imported `i18n::tr` keeps its id semantics.
+                    "tr" if !matches!(tokens.get(i.wrapping_sub(1)), Some(TokenTree::Punct(p)) if p.as_char() == '.' || p.as_char() == ':') => {
+                        push(&tokens, i + 1, 0, false, id_file && !label_file, out);
+                    }
+                    "tr_label" => push(&tokens, i + 1, 0, false, false, out),
+                    "row_label" => push(&tokens, i + 1, 1, true, false, out),
+                    "SelInput" if is_path(&tokens, i, "new") => push(&tokens, i + 4, 0, true, false, out),
+                    "i18n" if is_path(&tokens, i, "tr") => push(&tokens, i + 4, 0, false, true, out),
+                    _ => {}
+                }
+            }
+            if let TokenTree::Group(group) = &tokens[i] {
+                scan(group.stream().into_iter().collect(), label_file, id_file, out);
+            }
+            i += 1;
+        }
+    }
+
+    /// Record the string literal that is argument `arg` of the parenthesised group at `group`, if any.
+    fn push(tokens: &[TokenTree], group: usize, arg: usize, trim: bool, id_only: bool, out: &mut Vec<(String, bool)>) {
+        let Some(TokenTree::Group(g)) = tokens.get(group) else { return };
+        if g.delimiter() != Delimiter::Parenthesis {
+            return;
+        }
+        let mut args = g.stream().into_iter();
+        for _ in 0..arg {
+            if !args.any(|t| matches!(t, TokenTree::Punct(p) if p.as_char() == ',')) {
+                return;
+            }
+        }
+        let Some(TokenTree::Literal(lit)) = args.next() else { return };
+        if let Ok(text) = syn::parse_str::<syn::LitStr>(&lit.to_string()) {
+            out.push((if trim { text.value().trim_start().to_string() } else { text.value() }, id_only));
+        }
+    }
+
+    fn is_path(tokens: &[TokenTree], i: usize, name: &str) -> bool {
+        let colon = |k: usize| matches!(tokens.get(k), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+        colon(i + 1) && colon(i + 2) && matches!(tokens.get(i + 3), Some(TokenTree::Ident(id)) if *id == name)
+    }
+
+    /// Whether `tokens[i]` starts the attribute `#[cfg(test)]`.
+    fn cfg_test(tokens: &[TokenTree], i: usize) -> bool {
+        matches!(tokens.get(i), Some(TokenTree::Punct(p)) if p.as_char() == '#')
+            && matches!(tokens.get(i + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket
+                && g.stream().to_string().split_whitespace().collect::<String>() == "cfg(test)")
+    }
+
+    /// Past the item starting at `i`: its first `{…}` body or `;`. `#[cfg(test)]` on a single field,
+    /// array element or expression is not modelled (the UI sources have none).
+    fn skip_item(tokens: &[TokenTree], mut i: usize) -> usize {
+        while i < tokens.len()
+            && !matches!(&tokens[i], TokenTree::Group(g) if g.delimiter() == Delimiter::Brace)
+            && !matches!(&tokens[i], TokenTree::Punct(p) if p.as_char() == ';')
+        {
+            i += 1;
+        }
+        (i + 1).min(tokens.len())
+    }
+
+    /// Whether the file imports `tr` from `crate::i18n` inside a use list.
+    /// Whether the use list in `code` (spacing removed) imports `tr` from `crate::i18n` under its own name.
+    fn imports_i18n_tr(code: &str) -> bool {
+        code.split_once("usecrate::i18n::{")
+            .is_some_and(|(_, rest)| rest.split_once('}').is_some_and(|(list, _)| list.split(',').any(|name| name == "tr")))
+    }
+
+    /// The reference cases from the review, kept as tests of the token scanner.
+    #[test]
+    fn ordinary_and_multiline_row_calls_are_found() {
+        assert_eq!(literals("fn live() { row_label(\n ui, \n\"missing\"); }").len(), 1);
+    }
+
+    #[test]
+    fn cfg_test_function_with_lifetime_preserves_production() {
+        let found = literals("#[cfg(test)] fn helper<'a>(x: &'a str) { let c = '}'; } fn live() { tr_label(\"missing\"); }");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "missing");
+    }
+
+    #[test]
+    fn multiline_bare_tr_is_found() {
+        let found = literals("use crate::i18n::tr; fn live() { tr(\n\"missing\"); }");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].1, "tr imported from crate::i18n is an id");
+    }
+
+    #[test]
+    fn raw_label_is_found() {
+        assert_eq!(literals(r##"fn live() { tr_label(r#"missing"#); }"##).len(), 1);
+    }
+
+    #[test]
+    fn comments_are_ignored() {
+        assert_eq!(literals("// tr_label(\"missing\")\nfn live() {}").len(), 0);
+    }
+
+    #[test]
+    fn raw_string_in_test_function_preserves_production() {
+        let s = r###"#[cfg(test)] fn helper() { let s = r#"" { "#; } fn live() { tr_label("missing"); }"###;
+        assert_eq!(literals(s).len(), 1);
+    }
+
+    #[test]
+    fn cfg_marker_in_comment_preserves_production() {
+        assert_eq!(literals("// #[cfg(test)]\nfn live() { tr_label(\"missing\"); }").len(), 1);
+    }
+
+    #[test]
+    fn decoded_escape_matches_catalog_text() {
+        assert_eq!(literals(r#"tr_label("Say \"hello\"")"#)[0].0, "Say \"hello\"");
+    }
+
+    #[test]
+    fn a_call_inside_a_macro_is_found() {
+        assert_eq!(literals("fn live() { format!(\"{}\", tr_label(\"missing\")); }").len(), 1);
+    }
+
+    #[test]
+    fn a_row_label_after_a_longer_first_argument_is_found() {
+        assert_eq!(
+            literals("fn live() { row_label(&mut ui, \"missing\"); row_label(self.ui, \"  other\"); }"),
+            [("missing".to_string(), false), ("other".to_string(), false)]
+        );
+    }
+
+    #[test]
+    fn a_comment_or_spacing_does_not_change_which_tr_a_file_means() {
+        let id = [("Preferences".to_string(), true)];
+        assert_eq!(literals("// fn tr(text: &str) -> &str\nuse crate::i18n::tr;\nfn live() { tr(\"Preferences\"); }"), id);
+        assert_eq!(literals("use crate :: i18n :: tr;\nfn live() { tr(\"Preferences\"); }"), id);
+        assert_eq!(literals("use crate::i18n::{format, tr};\nfn live() { tr(\"Preferences\"); }"), id);
     }
 }

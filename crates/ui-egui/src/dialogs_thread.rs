@@ -13,7 +13,7 @@ const PITCHES: &[f64] = &[0.2, 0.25, 0.35, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 
 /// Returns (Enter pressed, automatic sizing requested).
 pub(crate) fn rows(ui: &mut egui::Ui, designation: &mut String, suggested: &mut Option<String>) -> (bool, bool) {
     row_label(ui, "Profile");
-    ui.label(tr("ISO metric"));
+    ui.label(tr("thread.iso_metric"));
     ui.end_row();
 
     row_label(ui, "Automatic size");
