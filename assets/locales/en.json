@@ -1563,5 +1563,7 @@
   "update.title": "Update available",
   "update.up_to_date": "SolidCraft is up to date.",
   "update.update_now": "Update now",
-  "update.you_have": "You have {version}."
+  "update.you_have": "You have {version}.",
+  "workspace.manufacture": "Manufacture",
+  "manufacture.enter_blocked": "Finish the current operation before entering Manufacture."
 }

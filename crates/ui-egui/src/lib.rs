@@ -117,6 +117,7 @@ pub(crate) mod display_lod;
 mod file_load_ui_tests;
 #[cfg(test)]
 mod fillet_spline_handle_tests;
+pub mod manufacture_workspace;
 pub(crate) mod navigation;
 pub mod palette;
 pub mod params_dialog;
@@ -305,6 +306,7 @@ pub struct SolveApp {
     file_picker: Option<file_picker::Pending>,
     pub viewport: viewport::ViewportState,
     pub render_workspace: render_workspace::State,
+    pub manufacture_workspace: manufacture_workspace::State,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
     /// The Change Parameters window, when open.
@@ -438,6 +440,7 @@ impl SolveApp {
             file_picker: None,
             viewport: viewport::ViewportState::default(),
             render_workspace,
+            manufacture_workspace: manufacture_workspace::State::default(),
             tool: None,
             dialog: None,
             params: None,
@@ -674,6 +677,7 @@ impl SolveApp {
                 }
                 if matches!(id, "file.new" | "doc.open" | "doc.recover") {
                     render_workspace::reset_document(self);
+                    manufacture_workspace::reset_document(self);
                     self.sketch_choices = sketch_families::Choices::default();
                     dim_view::cancel();
                     self.menu.props = None;
@@ -730,6 +734,7 @@ impl SolveApp {
         if id == "material.properties.validate" {
             self.material_card_review = Some(material_card_review::ReviewWindow::default());
             self.home.open = false;
+        manufacture_workspace::close_floating_dialogs(self);
             return;
         }
         // Another command ends Edit Text (its dialog is not a feature edit to keep).
@@ -779,6 +784,9 @@ impl SolveApp {
             return;
         }
         if !sketch_tools::start_hook(self, id) {
+            return;
+        }
+        if !manufacture_workspace::start_hook(self, id) {
             return;
         }
         if solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
@@ -1251,6 +1259,7 @@ impl SolveApp {
         file_picker::tick(self, ctx);
         render_workspace::sync_backend(self);
         render_workspace::tick(self, ctx);
+        manufacture_workspace::tick(self, ctx);
         file_load::tick(self, ctx);
         self.esc_handled = false;
         prefs::apply(self, ctx);
@@ -1399,11 +1408,16 @@ impl SolveApp {
         if render_workspace::active(self) {
             render_workspace::panel(self, ui);
         }
+        if manufacture_workspace::active(self) {
+            manufacture_workspace::panel(self, ui);
+        }
         agent_chat::show(self, ui);
         preview::update(self, ui.ctx());
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
             if render_workspace::active(self) {
                 render_workspace::show(self, ui);
+            } else if manufacture_workspace::active(self) {
+                manufacture_workspace::show(self, ui);
             } else {
                 viewport::show(self, ui);
             }

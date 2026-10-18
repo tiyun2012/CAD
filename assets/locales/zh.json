@@ -1563,5 +1563,7 @@
   "update.title": "有可用更新",
   "update.up_to_date": "SolidCraft 已是最新版本。",
   "update.update_now": "立即更新",
-  "update.you_have": "当前版本为 {version}。"
+  "update.you_have": "当前版本为 {version}。",
+  "workspace.manufacture": "Manufacture",
+  "manufacture.enter_blocked": "Finish the current operation before entering Manufacture."
 }
