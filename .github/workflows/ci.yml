@@ -21,7 +21,8 @@
 # jobs, so they never wait behind a build), and the repository checks, Clippy, the doc tests,
 # the reference tests and all four test shards on the self-hosted runners (`self-hosted-fast`, warm
 # build directories via scripts/ci/warm-target.sh). Fork PRs' Linux jobs run on the isolated, ephemeral
-# `self-hosted-untrusted` runners (no warm caches); everything else runs on GitHub's runners.
+# `self-hosted-untrusted` runners (no warm caches) when the PR number ends in 7, 8 or 9 (the rest of
+# the fork PRs, and everything else, run on GitHub's runners, which have far more free slots).
 # The test archive is always built on GitHub's runners: the self-hosted machine has a newer
 # glibc, so its binaries wouldn't start on ubuntu-24.04, while the archive runs there unchanged
 # (same /home/runner/work checkout path). Fork pull requests, the nightly run and Run workflow
@@ -80,6 +81,7 @@ jobs:
     outputs:
       native: ${{ steps.paths.outputs.native }}
       kernel: ${{ steps.paths.outputs.kernel }}
+      goldens: ${{ steps.paths.outputs.goldens }}
       windows: ${{ steps.paths.outputs.windows }}
       full: ${{ steps.paths.outputs.full }}
       packages: ${{ steps.paths.outputs.packages }}
@@ -104,6 +106,7 @@ jobs:
         run: |
           native=false
           kernel=false
+          goldens=false
           windows=false
           full=true
           packages=
@@ -129,6 +132,10 @@ jobs:
             git diff --no-renames --name-only -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-paths"
             while IFS= read -r -d '' path; do
               case "$path" in crates/kernel/*|vendor/truck-*) kernel=true ;; esac
+              # What can change a robustness golden: the kernel and the crates a design is built with.
+              case "$path" in
+                crates/kernel/*|crates/engine/*|crates/doc/*|crates/sketch/*|crates/geom/*|vendor/truck-*) goldens=true ;;
+              esac
               # What the Windows D3D12 jobs exercise: the GPU crate and its shaders, the app and
               # its startup, the viewport's wgpu glue, the vendored egui-wgpu, their scripts.
               case "$path" in
@@ -155,6 +162,10 @@ jobs:
             packages=$(sed -n 's/^packages=//p' "$RUNNER_TEMP/ci-affected")
             # Code changed but nothing was selected: be safe and test everything.
             if [ "$native" = true ] && [ "$full" != true ] && [ -z "$packages" ]; then full=true; fi
+            # The goldens are solidcraft-engine tests: its tests must be in the archive.
+            if [ "$goldens" = true ] && [ "$full" != true ]; then
+              case " $packages " in *" solidcraft-engine "*) ;; *) packages="$packages solidcraft-engine" ;; esac
+            fi
           fi
           # The reference tests replay recipes through solidcraft-cli: needed when it, or anything
           # it depends on, is selected.
@@ -168,6 +179,7 @@ jobs:
           {
             echo "native=$native"
             echo "kernel=$kernel"
+            echo "goldens=$goldens"
             echo "windows=$windows"
             echo "oracle=$oracle"
             echo "full=$full"
@@ -249,9 +261,9 @@ jobs:
     name: Build tests
     needs: changes
     if: needs.changes.outputs.native == 'true'
-    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'self-hosted-untrusted' || 'ubuntu-24.04' }}
+    runs-on: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && (endsWith(format('{0}', github.event.pull_request.number), '7') || endsWith(format('{0}', github.event.pull_request.number), '8') || endsWith(format('{0}', github.event.pull_request.number), '9'))) && 'self-hosted-untrusted' || 'ubuntu-24.04' }}
     # Fork builds compile inside gVisor on shared boxes; give them room to finish and upload.
-    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 90 || 45 }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && (endsWith(format('{0}', github.event.pull_request.number), '7') || endsWith(format('{0}', github.event.pull_request.number), '8') || endsWith(format('{0}', github.event.pull_request.number), '9'))) && 90 || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 60 || 45 }}
     env:
       CARGO_INCREMENTAL: "0"
       RUSTC_WRAPPER: sccache
@@ -259,6 +271,8 @@ jobs:
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Size parallel compiles to the job's memory
+        run: scripts/ci/build-jobs.sh
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -293,7 +307,7 @@ jobs:
   tests:
     name: Native Linux tests (${{ matrix.shard }}/4)
     needs: [changes, build-tests]
-    runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-fast' || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'self-hosted-untrusted' || 'ubuntu-24.04') }}
+    runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-fast' || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && (endsWith(format('{0}', github.event.pull_request.number), '7') || endsWith(format('{0}', github.event.pull_request.number), '8') || endsWith(format('{0}', github.event.pull_request.number), '9'))) && 'self-hosted-untrusted' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -337,6 +351,21 @@ jobs:
           # the build job's path, which is the same checkout path here.
           cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite \
             --profile ci --partition "slice:$SHARD/$SHARDS" --no-tests=pass "${all[@]}"
+      - name: Robustness goldens (pull requests that change geometry)
+        # Every seed of tests/robustness/goldens.json (each seed is a test), split over the shards;
+        # pushes to main and the nightly run them in the step above.
+        if: github.event_name == 'pull_request' && needs.changes.outputs.goldens == 'true'
+        env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ github.event_name == 'pull_request' && 2 || 4 }}
+        run: |
+          if ! cargo nextest run --archive-file tests.tar.zst --workspace-remap . --extract-to . --extract-overwrite \
+            --profile ci --ignore-default-filter --partition "slice:$SHARD/$SHARDS" --no-tests=pass \
+            -E 'package(solidcraft-engine) & test(/^tests::robustness_goldens::/)'; then
+            echo "::error::A robustness golden changed. If the new result is intended, re-record it in this pull request and say why:"
+            echo "::error::ROBUSTNESS_GOLDENS_BLESS=\"why it changed\" cargo test --profile ci -p solidcraft-engine --lib robustness_goldens::   (see docs/robustness.md)"
+            exit 1
+          fi
       - name: Upload test timings
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -450,6 +479,8 @@ jobs:
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Size parallel compiles to the job's memory
+        run: scripts/ci/build-jobs.sh
       - name: Warm build directory (self-hosted runner)
         if: runner.environment == 'self-hosted' && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
         run: scripts/ci/warm-target.sh doc-tests
@@ -492,7 +523,7 @@ jobs:
     name: Reference tests
     needs: changes
     if: needs.changes.outputs.oracle == 'true'
-    runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-fast' || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'self-hosted-untrusted' || 'ubuntu-24.04') }}
+    runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-fast' || ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && (endsWith(format('{0}', github.event.pull_request.number), '7') || endsWith(format('{0}', github.event.pull_request.number), '8') || endsWith(format('{0}', github.event.pull_request.number), '9'))) && 'self-hosted-untrusted' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     env:
       CARGO_INCREMENTAL: "0"
@@ -501,6 +532,8 @@ jobs:
       SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Size parallel compiles to the job's memory
+        run: scripts/ci/build-jobs.sh
       - name: Warm build directory (self-hosted runner)
         if: runner.environment == 'self-hosted' && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository)
         run: scripts/ci/warm-target.sh oracle

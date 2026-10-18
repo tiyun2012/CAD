@@ -138,6 +138,10 @@ the most complete description of the house style.
 | UI scenarios | `crates/ui-egui/tests/scenarios/*.json` | part of `cargo test` |
 | Reference tests | `cargo xtask oracle` | `tests/oracle/` (see below) |
 
+A geometry change that changes the robustness goldens re-records them in the same pull request:
+`ROBUSTNESS_GOLDENS_BLESS="why it changed" cargo test --profile ci -p solidcraft-engine --lib robustness_goldens::`
+(see [docs/robustness.md](docs/robustness.md)); CI runs every seed on pull requests that touch geometry.
+
 **UI scenarios** drive the real app headless: start a tool, click a plane or a sketch point,
 press keys, then assert on the result.
 
