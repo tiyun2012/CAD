@@ -192,13 +192,22 @@ fn auto_operation_in(s: &Session, p: &Value, world_faces: bool) -> Option<&'stat
     }
     // Match the evaluator's implicit participants: a grouped cut from an empty
     // assembly component considers every body; otherwise keep the active scope.
-    // Explicit participants override either default.
-    let parts = string_list(p, "participants");
+    // Explicit targets, else participants, override either default.
+    let parts = match string_list(p, "targets") {
+        targets if targets.is_empty() => string_list(p, "participants"),
+        targets => targets,
+    };
     let implicit_all = grouped.is_some() && !st.bodies.iter().any(|body| s.doc.model_body_component(body) == s.active_component);
     let bodies: Vec<_> = st
         .bodies
         .iter()
-        .filter(|b| if parts.is_empty() { implicit_all || s.doc.model_body_component(b) == s.active_component } else { parts.contains(&b.name) })
+        .filter(|b| {
+            if parts.is_empty() {
+                implicit_all || s.doc.model_body_component(b) == s.active_component
+            } else {
+                parts.iter().any(|t| t == "*" || *t == b.name)
+            }
+        })
         .collect();
     if bodies.is_empty() {
         return Some("new");
@@ -630,6 +639,18 @@ fn extrude(s: &mut Session, p: &Value) -> Result<Value> {
         thin,
     };
     add_feature(s, p, kind)
+}
+
+/// The body a Join extrude with these parameters takes as its target when given none: the
+/// picked face's, or the one its sketch lies on.
+pub fn join_face_body(s: &Session, p: &Value) -> Option<String> {
+    if let Some(body) = str_(p, "face_body") {
+        return Some(body.to_string());
+    }
+    if p.get("face").is_some() || p.get("faces").is_some() {
+        return None;
+    }
+    sketch_face_body(s, feature_sketch(s, p, "solid.extrude").ok()?)
 }
 
 /// The body whose face `sketch` is attached to (on the face itself, not offset from it), when
@@ -2214,6 +2235,10 @@ mod thin_extrude_tests;
 #[cfg(test)]
 #[path = "extrude_convention_tests.rs"]
 mod extrude_convention_tests;
+
+#[cfg(test)]
+#[path = "extrude_targets_tests.rs"]
+mod extrude_targets_tests;
 /// `solid.fillet corner?: rolling|g2`: the default keeps the rolling ball's sphere corner, `g2`
 /// is accepted and refuses (item 10's patch is built but not sewn in yet, see `corner_g2`), and an
 /// unknown word is refused.

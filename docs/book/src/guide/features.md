@@ -18,6 +18,13 @@ Extruding into existing material selects **Cut**. In an empty component it selec
 choose **New Body** explicitly to keep an addition separate. Changing the default does not alter
 operations already saved in a design.
 
+A Join, Cut or Intersect changes the bodies picked under **Targets** in the Extrude dialog. With
+none picked it changes the visible bodies of the active component (a Join from a body's face, or
+from a sketch on one, changes that body). When some of the component's bodies are hidden, the
+visible ones are saved as the extrude's `targets`, so showing or hiding bodies later never changes
+the model. Without `targets`, `solid.extrude` changes every body of the active component that it
+meets, hidden or shown.
+
 A taper slopes the sides of any profile, sketch text included: lines, arcs and spline or conic
 curves move in or out together, and a flat tip shorter than the taper closes to a point. On
 spline and conic sides the slope is approximate: the moved outline is a curve of the same kind

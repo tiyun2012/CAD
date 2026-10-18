@@ -1491,6 +1491,7 @@
   "ui.tangent": "正接",
   "ui.taper_angle": "テーパ角度",
   "ui.tapped": "ねじ穴",
+  "ui.targets_visible_if_none": "ターゲット（未選択時は表示中のボディ）",
   "ui.text": "テキスト",
   "ui.theme": "テーマ",
   "ui.thickness": "厚さ",

@@ -722,6 +722,13 @@ impl Dialog {
         }
         d.sync_thread(s);
         d.advance();
+        // Added after the pre-selection and `advance`: a picked face stays a profile, and the
+        // profiles input stays active. Bodies selected beforehand are the targets.
+        if matches!(d.kind, Kind::Extrude { .. }) {
+            let mut targets = SelInput::new(TARGETS, BODIES, true);
+            targets.items = s.selection.iter().filter(|sel| matches!(sel, Sel::Body { .. })).cloned().collect();
+            d.inputs.push(targets);
+        }
         Some(d)
     }
 
@@ -3240,6 +3247,31 @@ pub(crate) fn roll_marker(app: &mut SolveApp, marker: Option<usize>) -> Result<(
 /// The pick input an extent of To Object adds (a face, vertex or point to go to).
 const TO_OBJECT: &str = "To Object";
 const FROM_OBJECT: &str = "From Object";
+/// The bodies an extrude joins, cuts or intersects.
+pub(crate) const TARGETS: &str = "Targets (visible if none)";
+
+fn picked_bodies(inputs: &[SelInput], label: &str) -> Vec<String> {
+    inputs
+        .iter()
+        .filter(|i| i.label == label)
+        .flat_map(|i| &i.items)
+        .filter_map(|x| if let Sel::Body { name } = x { Some(name.clone()) } else { None })
+        .collect()
+}
+
+/// A new Join, Cut or Intersect with no picked targets changes the visible bodies of the active
+/// component: the targets to store when that differs from the command's default (some of them
+/// are hidden). `face_body` is the body a Join from a face defaults to; it stays the target
+/// while it is shown. `None`: the command's default.
+fn visible_targets(s: &Session, face_body: Option<&str>) -> Option<Vec<String>> {
+    let st = s.model.state();
+    let own: Vec<&str> = st.bodies.iter().filter(|b| s.doc.model_body_component(b) == s.active_component).map(|b| b.name.as_str()).collect();
+    let visible: Vec<String> = own.iter().filter(|name| s.body_visible(name)).map(|name| name.to_string()).collect();
+    if visible.is_empty() || visible.len() == own.len() || face_body.is_some_and(|b| s.body_visible(b)) {
+        return None;
+    }
+    Some(visible)
+}
 
 fn object_on(inputs: &[SelInput], label: &str) -> bool {
     inputs.iter().any(|i| i.label == label)
@@ -3753,12 +3785,25 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             if object_on(&d.inputs, FROM_OBJECT) {
                 common["from"] = object_point(&d.inputs, FROM_OBJECT).ok_or("select the object to extrude from")?;
             }
+            let op = OPS.get(*operation).copied().unwrap_or("new");
+            let targets = picked_bodies(&d.inputs, TARGETS);
+            if op != "new" && !targets.is_empty() {
+                common["targets"] = json!(targets);
+            }
+            // An edit keeps the scope the feature has.
+            let implicit = op != "new" && targets.is_empty() && d.editing.is_none() && !d.extra.contains_key("targets");
             let with = |extra: Value| -> Value {
                 let mut p = common.clone();
                 if let (Value::Object(m), Value::Object(e)) = (&mut p, extra) {
                     m.extend(e);
                     for (k, v) in &d.extra {
                         m.entry(k.clone()).or_insert_with(|| v.clone());
+                    }
+                }
+                if implicit {
+                    let face = if op == "join" { solidcraft_engine::join_face_body(s, &p) } else { None };
+                    if let Some(visible) = visible_targets(s, face.as_deref()) {
+                        p["targets"] = json!(visible);
                     }
                 }
                 p
@@ -4720,8 +4765,13 @@ pub fn for_feature(app: &SolveApp, id: u64, marker: Option<usize>) -> Option<Dia
                     inp.items = items.into_iter().map(|index| Sel::Profile { sketch: sketch.0, index }).collect();
                 }
             }
-            if !targets.is_empty() {
+            // `*` (every body) has no body to show: it is kept as it is.
+            let every = targets.iter().any(|t| *t == "*");
+            if every {
                 d.extra.insert("targets".into(), json!(targets));
+            }
+            if let Some(input) = d.inputs.iter_mut().find(|i| i.label == TARGETS) {
+                input.items = if every { Vec::new() } else { targets.iter().map(|t| Sel::Body { name: t.to_string() }).collect() };
             }
             d
         }

@@ -1491,6 +1491,7 @@
   "ui.tangent": "Tangent",
   "ui.taper_angle": "Taper Angle",
   "ui.tapped": "Tapped",
+  "ui.targets_visible_if_none": "Targets (visible if none)",
   "ui.text": "Text",
   "ui.theme": "Theme",
   "ui.thickness": "Thickness",
