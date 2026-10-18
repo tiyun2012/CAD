@@ -654,6 +654,13 @@ impl SolveApp {
             }
             // Curves drawn in construction (or centerline) mode take that line type.
             sketch_palette::apply_mode(self, id, v);
+            if id == "body.rename"
+                && let (Some(old), Some(new)) = (v.get("body").and_then(Value::as_str), v.get("name").and_then(Value::as_str))
+            {
+                for b in self.ui.locked_bodies.iter_mut().filter(|b| *b == old) {
+                    *b = new.to_string();
+                }
+            }
         }
         match &r {
             Ok(v) => {

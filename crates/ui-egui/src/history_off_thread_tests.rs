@@ -98,3 +98,39 @@ fn a_design_changed_while_a_move_computes_is_computed_again() {
     assert!(h.app.session.revision > revision, "the move ran after the change");
     assert_eq!(marker(&h), Some(2));
 }
+
+/// A body renamed in its rename box: off the window thread, the features after the one that
+/// made it (a pattern) kept as they are, and the body's lock following the new name.
+#[test]
+fn a_body_renamed_in_the_browser_keeps_the_pattern_after_it() {
+    let mut h = Harness::new();
+    h.app.home.open = false;
+    for (id, p) in [
+        ("sketch.create", json!({"plane": "XY"})),
+        ("sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [84, 84]})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 3})),
+        ("sketch.create", json!({"plane": "XY"})),
+        ("sketch.rectangle.rounded", json!({"p0": [4, 4], "p1": [38, 38], "radius": 4})),
+        ("sketch.finish", json!({})),
+        ("solid.extrude", json!({"distance": 4, "direction": "negative", "operation": "join", "name": "Boss", "profiles": "all"})),
+        ("solid.chamfer", json!({"edges": [[21, 4, 0]], "distance": 1, "name": "Root"})),
+        (
+            "solid.pattern.rectangular",
+            json!({"features": ["Boss", "Root"], "dir1": [1, 0, 0], "count1": 2, "spacing1": 42, "dir2": [0, 1, 0], "count2": 2, "spacing2": 42}),
+        ),
+    ] {
+        h.app.run(id, p).unwrap();
+    }
+    h.app.ui.locked_bodies.push("Body1".into());
+    h.app.apply_off_thread = Some(Duration::ZERO);
+    crate::context_menu::start_rename(&mut h.app, crate::context_menu::RenameWhat::Body("Body1".into()), egui::pos2(0.0, 0.0));
+    h.frames(2);
+    h.step(&json!({"text": "Baseplate"})).unwrap();
+    h.step(&json!({"key": "Enter"})).unwrap();
+    until_settled(&mut h);
+    let names: Vec<String> = h.app.session.model.state().bodies.iter().map(|b| b.name.clone()).collect();
+    assert_eq!(names, ["Baseplate"]);
+    assert_eq!(h.app.session.model.last_recomputed, 0, "no feature computed again");
+    assert_eq!(h.app.ui.locked_bodies, ["Baseplate"]);
+}

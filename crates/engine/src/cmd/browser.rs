@@ -552,6 +552,7 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     if name == old {
         return Ok(json!({"body": old, "name": name}));
     }
+    let before = s.doc.clone();
     let st = s.model.state();
     let b = st.body(&old).ok_or_else(|| bad(cmd, format!("no body `{old}`")))?;
     if st.body(name).is_some() {
@@ -668,8 +669,20 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     for b in s.visibility.hidden_bodies.iter_mut().filter(|b| **b == old) {
         *b = name.to_string();
     }
+    // Later features keep their results under the new name where that is what evaluating gives.
+    if s.model.rename_body(&before, &s.doc, fid, &old, name) {
+        check_renamed(s);
+    }
     Ok(json!({"body": old, "name": name}))
 }
+
+#[cfg(test)]
+fn check_renamed(s: &Session) {
+    tests::same_as_evaluated(s);
+}
+
+#[cfg(not(test))]
+fn check_renamed(_: &Session) {}
 
 fn redefine_sketch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "sketch.redefine";
@@ -791,6 +804,99 @@ mod tests {
 
     fn names(s: &Session) -> Vec<String> {
         s.model.state().bodies.iter().map(|b| b.name.clone()).collect()
+    }
+
+    /// The results a rename kept are what evaluating the renamed design from scratch gives.
+    pub(super) fn same_as_evaluated(s: &Session) {
+        let mut fresh = solidcraft_doc::Model::new();
+        fresh.no_cache = true;
+        fresh.evaluate(&s.doc);
+        assert_eq!(s.model.results.len(), fresh.results.len());
+        let bodies = |st: &solidcraft_doc::ModelState| -> Vec<(String, u64, u64, usize, Vec<String>)> {
+            st.bodies
+                .iter()
+                .map(|b| (b.name.clone(), b.feature, b.component, b.body.face_count(), solidcraft_doc::naming::face_names(b).to_vec()))
+                .collect()
+        };
+        let links = |st: &solidcraft_doc::ModelState| -> Vec<(u64, Vec<solidcraft_sketch::Link>)> {
+            st.sketches.iter().map(|k| (k.feature, k.sketch.links.clone())).collect()
+        };
+        for (kept, built) in s.model.results.iter().zip(&fresh.results) {
+            let what = &kept.name;
+            assert_eq!((kept.id, kept.skipped, kept.error.is_some()), (built.id, built.skipped, built.error.is_some()), "{what}");
+            let (a, b) = (&kept.state, &built.state);
+            assert_eq!(a.body_counter, b.body_counter, "{what}: body counter");
+            assert_eq!(bodies(a), bodies(b), "{what}: bodies");
+            assert_eq!(a.threads, b.threads, "{what}: threads");
+            assert_eq!(serde_json::to_value(&a.sheets).ok(), serde_json::to_value(&b.sheets).ok(), "{what}: sheets");
+            assert_eq!(links(a), links(b), "{what}: sketch links");
+        }
+    }
+
+    fn plate_with_pattern() -> Session {
+        let mut s = Session::default();
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Plate"}));
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0": [0, 0], "p1": [84, 84]}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 3}));
+        run(&mut s, "sketch.create", json!({"plane": "XY", "name": "Boss"}));
+        run(&mut s, "sketch.rectangle.rounded", json!({"p0": [4, 4], "p1": [38, 38], "radius": 4}));
+        run(&mut s, "sketch.finish", json!({}));
+        run(&mut s, "solid.extrude", json!({"distance": 4, "direction": "negative", "operation": "join", "name": "BossX", "profiles": "all"}));
+        run(&mut s, "solid.chamfer", json!({"edges": [[21, 4, 0]], "distance": 1, "name": "Root"}));
+        run(
+            &mut s,
+            "solid.pattern.rectangular",
+            json!({"features": ["BossX", "Root"], "dir1": [1, 0, 0], "count1": 2, "spacing1": 42, "dir2": [0, 1, 0], "count2": 2, "spacing2": 42}),
+        );
+        run(
+            &mut s,
+            "solid.cylinder",
+            json!({"diameter": 5, "height": 10, "base": [63, 63, -2], "operation": "cut", "targets": ["Body1"], "name": "Hole"}),
+        );
+        s
+    }
+
+    /// Renaming the body a large pattern builds on evaluated every feature after the one that
+    /// made it again: minutes on a Gridfinity baseplate, with the window frozen.
+    #[test]
+    fn renaming_a_body_recomputes_no_feature() {
+        let mut s = plate_with_pattern();
+        let volume = |s: &mut Session| run(s, "inspect.measure", json!({}))["total"]["volume_mm3"].as_f64().unwrap();
+        let want = volume(&mut s);
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Baseplate"}));
+        assert_eq!((s.model.last_recomputed, s.model.last_restored), (0, 0), "every result is kept");
+        assert_eq!(names(&s), ["Baseplate"]);
+        assert_eq!(s.doc.find_feature("Hole").unwrap().participants, ["Baseplate"], "what names the body follows");
+        assert!(s.model.results.iter().all(|r| r.error.is_none()));
+        assert!((volume(&mut s) - want).abs() < 1e-6);
+        // Undo and redo take the results from the cache; later edits build on the renamed ones.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!((names(&s), s.model.last_recomputed), (vec!["Body1".to_string()], 0));
+        run(&mut s, "edit.redo", json!({}));
+        assert_eq!((names(&s), s.model.last_recomputed), (vec!["Baseplate".to_string()], 0));
+        run(&mut s, "timeline.edit", json!({"feature": "Root", "set": {"distance": "0.5"}}));
+        run(&mut s, "timeline.edit", json!({"feature": "Hole", "set": {"radius": "3"}}));
+        same_as_evaluated(&s);
+        assert_eq!(s.doc.find_feature("Hole").unwrap().participants, ["Baseplate"]);
+        // A name the body counter would give a later body is evaluated again.
+        run(&mut s, "body.rename", json!({"body": "Baseplate", "name": "Body7"}));
+        assert!(s.model.last_recomputed > 0);
+        assert_eq!(names(&s), ["Body7"]);
+    }
+
+    /// A name the design files a component under (an import's, suppressed since) puts the body
+    /// renamed to it in that component once evaluated: the rename evaluates again.
+    #[test]
+    fn renaming_to_a_name_filed_under_a_component_evaluates_again() {
+        let mut s = plate_with_pattern();
+        run(&mut s, "component.create", json!({"name": "Covers", "activate": false}));
+        let covers = s.doc.components.iter().find(|c| c.name == "Covers").unwrap().id;
+        s.doc_mut().body_components.insert("Lid".into(), covers);
+        run(&mut s, "body.rename", json!({"body": "Body1", "name": "Lid"}));
+        assert!(s.model.last_recomputed > 0);
+        same_as_evaluated(&s);
+        assert_eq!(s.model.state().body("Lid").map(|b| b.component), Some(covers));
     }
 
     #[test]

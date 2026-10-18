@@ -69,6 +69,23 @@ impl NameCell {
     pub fn same(body: &ModelBody) -> Self {
         NameCell { copy_of: Some(Arc::new(body.clone())), ..NameCell::default() }
     }
+    /// The names of `body` under a new name: worked out from `body` as it was named, whose
+    /// history names its inputs by their names then. Its origin stays for the depth.
+    pub(crate) fn renamed(body: &ModelBody) -> Self {
+        NameCell { origin: body.names.origin.clone(), copy_of: Some(Arc::new(body.clone())), ..NameCell::default() }
+    }
+    /// Whether `body`'s face names are made from its own name (no history names them).
+    pub(crate) fn from_body_name(body: &ModelBody) -> bool {
+        let mut b = body;
+        for _ in 0..MAX_DEPTH {
+            match (&b.names.copy_of, &b.names.origin) {
+                (Some(source), _) => b = source,
+                (None, Some(o)) => return o.depth >= MAX_DEPTH,
+                (None, None) => return true,
+            }
+        }
+        true
+    }
     fn shared(names: Arc<Names>) -> Self {
         let cell = OnceLock::new();
         let _ = cell.set(names);

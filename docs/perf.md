@@ -1,5 +1,37 @@
 # Design loading
 
+## Renaming a body keeps the timeline (2026-10-18)
+
+`body.rename` stores the new name on the feature that made the body and in the features that
+name it. Body names enter every later feature's fingerprint and cache key (the state digest,
+each body's key), so every feature after that one was evaluated again, on the window thread:
+on a Gridfinity baseplate (two rectangular patterns of 42 cells) the window froze for about ten
+minutes. `Model::rename_body` (`crates/doc/src/eval_rename.rs`) renames the body on the
+evaluated results instead and fingerprints them for the renamed design, so the evaluation that
+follows reuses every result. Its face names are still worked out from the snapshot they were
+made in (`NameCell::renamed`).
+
+A result is renamed only where evaluating the renamed design gives the same result under the
+new name. The design is evaluated again where the name could steer more than a lookup: names
+derived from it (`Body1 (2)`, instance names, sheet metal faces), text that spells it, a
+message naming it outside backticks, a `BodyN` name, a counted name given back while a later
+feature counts bodies, a new name the design files a component or offset under, and an assembly
+import that leaves out a part's later instances (it names its bodies by the file's index). The
+rename box runs the command with `run_heavy`, so that evaluation is off the window thread. The
+engine tests check every rename that keeps results against an evaluation from scratch.
+
+Undo and redo take the earlier results from the evaluation cache. On a design whose results
+outgrow the cache (64 MB, oldest out first) they are evaluated again, off the window thread.
+
+`solidcraft-cli run --timings`, plate, joined boss, two chamfers and a 4 × 3 rectangular pattern
+of them, then `body.rename` (`main` e70bd524, Apple M4 Pro, 14 cores, other builds running):
+
+| Step | Before | After |
+| --- | ---: | ---: |
+| `solid.pattern.rectangular` | 14,141 ms | 14,087 ms |
+| `body.rename` | 14,437 ms | 0.3 ms |
+| `inspect.measure` after the rename | 201 ms | 202 ms |
+
 ## Edges made by booleans: each point evaluated once (2026-10-16)
 
 A boolean meshes both operands with truck-meshalgo, which first divides every edge into a

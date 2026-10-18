@@ -201,6 +201,46 @@ fn a_step_assembly_comes_in_as_nested_components_with_its_instances() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An assembly import that leaves out a part's later instances names its bodies by the file's
+/// index: renaming one (here a second `Peg`, built as `Peg (2)`) evaluates the import again
+/// rather than renaming its result.
+#[test]
+fn renaming_a_body_of_an_assembly_import_evaluates_it_again() {
+    let dir = temp_dir("rename");
+    let plate = box_solid(Vec3::ZERO, Vec3::new(100.0, 60.0, 5.0)).unwrap();
+    let pin = box_solid(Vec3::ZERO, Vec3::new(2.0, 2.0, 10.0)).unwrap();
+    let stud = box_solid(Vec3::ZERO, Vec3::new(4.0, 4.0, 6.0)).unwrap();
+    let part = |name: &str, body: &str, solid| ExportProduct {
+        name: name.into(),
+        bodies: vec![ExportBody { name: body.into(), body: solid, color: None }],
+        children: Vec::new(),
+    };
+    let products = vec![
+        ExportProduct {
+            name: "Rig".into(),
+            bodies: Vec::new(),
+            children: vec![
+                (2, at(80.0, 40.0, 5.0), "Pin-1".into()),
+                (2, at(10.0, 10.0, 5.0), "Pin-2".into()),
+                (3, at(50.0, 30.0, 5.0), "Stud-1".into()),
+                (1, at(0.0, 0.0, 0.0), "Base-1".into()),
+            ],
+        },
+        part("Base", "Slab", &plate),
+        part("Pin", "Peg", &pin),
+        part("Stud", "Peg", &stud),
+    ];
+    let path = dir.join("pegs.step");
+    std::fs::write(&path, step_export_products(&products, 0, &StepHeader::default()).unwrap()).unwrap();
+    let mut s = Session::default();
+    run(&mut s, "file.insert_step", json!({"path": path.to_string_lossy()}));
+    let skip = s.doc.features.iter().any(|f| matches!(&f.kind, solidcraft_doc::FeatureKind::Import { skip, .. } if !skip.is_empty()));
+    assert!(skip, "the file's later instances are left out");
+    run(&mut s, "body.rename", json!({"body": "Peg (2)", "name": "Rod"}));
+    assert!(s.model.last_recomputed > 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Each occurrence's degrees of freedom, as `joint.list` gives them.
 fn dofs(s: &mut Session) -> (std::collections::BTreeMap<u64, u64>, Value) {
     let r = run(s, "joint.list", json!({}));
