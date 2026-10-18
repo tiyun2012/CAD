@@ -6,8 +6,8 @@
 //!
 //! Case count: `PROPTEST_CASES` (default 8). Pull requests and pushes to main skip this file
 //! (.config/nextest.toml, .github/workflows/ci.yml): its random inputs differ on every run, so a
-//! known kernel bug would turn main red at random. The nightly `property-tests` job runs it with
-//! more cases. A long local run:
+//! known kernel bug would turn main red at random. `cargo xtask test` skips it too, unless given
+//! `--property-tests`. The nightly `property-tests` job runs it with more cases. A long local run:
 //! `PROPTEST_CASES=2000 cargo test -p solidcraft-kernel --test boolean_props`.
 //! proptest saves every failing seed in `tests/boolean_props.proptest-regressions`. Commit it, and
 //! copy the shrunk case into a `#[test]` below (ignored, with its issue, until the kernel is fixed).
