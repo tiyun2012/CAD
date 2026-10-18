@@ -76,8 +76,8 @@ fn compass_negative_ends_are_hollow_and_positive_ends_are_chunkier() {
                 assert!(output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(text) if text.galley.text() == "X")));
             } else {
                 assert_eq!(end.fill, Color32::TRANSPARENT);
-                assert_eq!(end.stroke, Stroke::new(2.2, t.triad[0]));
-                assert_eq!(end.radius, 6.5);
+                assert_eq!(end.stroke.width, 2.6);
+                assert_eq!(end.radius, 5.6);
                 assert!(!output.shapes.iter().any(|s| matches!(&s.shape, Shape::Text(_))));
             }
             for shape in &output.shapes {

@@ -158,13 +158,20 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         t.triad[2]
     };
     let positive = !name.starts_with('-');
-    let ink = if depth < -0.01 { col.gamma_multiply(0.55) } else { col };
+    // Positive shafts are the full axis colour; negative ones are a dimmed tint (and any end
+    // pointing away from the viewer dims further).
+    let ink = if !positive || depth < -0.01 { col.gamma_multiply(0.55) } else { col };
     // Keep picking at the original tips; only the artwork moves inward, leaving
     // more breathing room inside the unchanged 55 px compass background.
     let at = c + (at - c) * 0.84;
-    let radius = if positive { 13.0 } else { 6.5 };
+    let radius = if positive { 13.0 } else { 5.6 };
     let direction = (at - c).normalized();
-    painter.line_segment([c, at - direction * radius], Stroke::new(3.0, ink));
+    let width = 3.6;
+    // A negative shaft stops at the outer edge of its ring; a positive one runs under its disc.
+    let end = if positive { at - direction * radius } else { at - direction * (radius + 1.3) };
+    painter.line_segment([c, end], Stroke::new(width, ink));
+    // The round cap sits at the origin; the other end is covered by the disc or ring.
+    painter.circle_filled(c, width / 2.0, ink);
     if positive {
         painter.circle_filled(at, radius, col);
     }
@@ -177,11 +184,11 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         // The letters are heavy: egui's regular face gets a small overstrike for weight.
         let letter = if hovered { ink } else { t.on_accent };
         let label = name.to_uppercase();
-        for dx in [-0.35, 0.35] {
-            painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(14.0), letter);
+        for dx in [-0.5, 0.5] {
+            painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(15.5), letter);
         }
     }
     if !positive || hovered {
-        painter.circle_stroke(at, radius, Stroke::new(2.2, if hovered { t.accent } else { ink }));
+        painter.circle_stroke(at, radius, Stroke::new(2.6, if hovered { t.accent } else { ink }));
     }
 }
