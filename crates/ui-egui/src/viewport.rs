@@ -3309,6 +3309,8 @@ pub(crate) fn axis_rect(app: &SolveApp, rect: Rect) -> Rect {
 }
 
 const AXIS_LENGTH: f64 = 38.0;
+/// The artwork sits inside the pointer reach so the compass keeps breathing room in its circle.
+const AXIS_ART_SCALE: f64 = 0.84;
 use crate::icons::navigation::AXIS_RADIUS;
 
 /// Six signed world axes, sorted back to front so overlapping tips have one owner.
@@ -3316,7 +3318,9 @@ fn axis_tips(cam: &Camera, c: Pos2) -> Vec<(&'static str, Vec3, Pos2, f64)> {
     let (r, u, b) = cam.basis();
     let mut tips: Vec<_> = [("x", Vec3::X), ("-x", -Vec3::X), ("y", Vec3::Y), ("-y", -Vec3::Y), ("z", Vec3::Z), ("-z", -Vec3::Z)]
         .into_iter()
-        .map(|(name, d)| (name, d, c + vec2((d.dot(r) * AXIS_LENGTH) as f32, -(d.dot(u) * AXIS_LENGTH) as f32), d.dot(b)))
+        .map(|(name, d)| {
+            (name, d, c + vec2((d.dot(r) * AXIS_LENGTH * AXIS_ART_SCALE) as f32, -(d.dot(u) * AXIS_LENGTH * AXIS_ART_SCALE) as f32), d.dot(b))
+        })
         .collect();
     tips.sort_by(|a, b| a.3.total_cmp(&b.3));
     tips
@@ -3379,7 +3383,7 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| ui.is_enabled() && ui.rect_contains_pointer(rect) && !crate::shell::covered(app, *p));
     let hovered = if orbiting { None } else { hover.and_then(|p| axis_hit(&tips, p)) };
     let painter = ui.painter_at(rect);
-    painter.circle(c, 55.0, t.overlay.gamma_multiply(0.35), Stroke::new(1.0, t.border.gamma_multiply(0.75)));
+    painter.circle(c, 49.5, t.overlay.gamma_multiply(0.35), Stroke::new(1.0, t.border.gamma_multiply(0.75)));
     for (i, (name, d, at, depth)) in tips.iter().enumerate() {
         if i == 3 {
             // The origin dot sits behind the three front axes and over the three back ones.
@@ -3413,7 +3417,7 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
             }
         }
     }
-    let home = Rect::from_center_size(pos2(c.x - 44.0, c.y - 44.0), vec2(18.0, 18.0));
+    let home = Rect::from_center_size(pos2(c.x - 37.0, c.y - 37.0), vec2(18.0, 18.0));
     crate::scenario::publish_rect("axis_view:home", home);
     crate::scenario::publish_handle("axis_view:home", home.center());
     let hr = ui.interact(home, ui.id().with("axis_view_home"), Sense::click());

@@ -148,7 +148,8 @@ pub(crate) fn curved_arrow(painter: &egui::Painter, at: Pos2, clockwise: bool, h
         arrow(painter, *tip, vec2(-end.sin(), end.cos()) * (sign * scale), hover, t);
     }
 }
-pub(crate) const AXIS_RADIUS: f32 = 11.0;
+/// The pointer target around a compass end: larger than the drawn disc, so it is easy to hit.
+pub(crate) const AXIS_RADIUS: f32 = 15.0;
 pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, at: Pos2, depth: f64, hovered: bool, t: Tokens) {
     let col = if d.x != 0.0 {
         t.triad[0]
@@ -161,9 +162,6 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     // Positive shafts are the full axis colour; negative ones are a dimmed tint (and any end
     // pointing away from the viewer dims further).
     let ink = if !positive || depth < -0.01 { col.gamma_multiply(0.55) } else { col };
-    // Keep picking at the original tips; only the artwork moves inward, leaving
-    // more breathing room inside the unchanged 55 px compass background.
-    let at = c + (at - c) * 0.84;
     let radius = if positive { 11.0 } else { 4.8 };
     let direction = (at - c).normalized();
     let width = 3.6;
@@ -179,7 +177,8 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     // centres, so the translucent compass background shows through. A hovered tip of either
     // kind turns fully white.
     if hovered {
-        painter.circle_filled(at, radius, t.on_accent);
+        // Same outer size as the resting tip: a ring's outline is half its stroke outside.
+        painter.circle_filled(at, if positive { radius } else { radius + 1.2 }, t.on_accent);
     }
     if positive {
         // The letters are heavy: egui's regular face gets a small overstrike for weight. On a
@@ -190,7 +189,7 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
             painter.text(at + vec2(dx, 0.0), Align2::CENTER_CENTER, &label, FontId::proportional(13.5), letter);
         }
     }
-    if !positive || hovered {
+    if !positive {
         painter.circle_stroke(at, radius, Stroke::new(2.4, if hovered { t.on_accent } else { ink }));
     }
 }

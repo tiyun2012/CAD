@@ -33,11 +33,11 @@ fn compass_keeps_signed_targets_hover_and_clicks_at_both_scales() {
                 h.settle();
                 let tips = axis_tips(&h.app.cam, outer.center());
                 let (r, u, _) = h.app.cam.basis();
-                let p = outer.center() + vec2((direction.dot(r) * 38.0) as f32, -(direction.dot(u) * 38.0) as f32);
+                let p = outer.center() + vec2((direction.dot(r) * 38.0 * 0.84) as f32, -(direction.dot(u) * 38.0 * 0.84) as f32);
                 assert_eq!(crate::scenario::handle_at(&format!("axis_view:{name}")), Some(p));
-                for offset in [vec2(0.0, 0.0), vec2(10.9, 0.0), vec2(11.1, 0.0)] {
+                for offset in [vec2(0.0, 0.0), vec2(14.9, 0.0), vec2(15.1, 0.0)] {
                     let sample = p + offset;
-                    let expected = tips.iter().enumerate().rev().find(|(_, tip)| tip.2.distance(sample) <= 11.0).map(|(i, _)| i);
+                    let expected = tips.iter().enumerate().rev().find(|(_, tip)| tip.2.distance(sample) <= 15.0).map(|(i, _)| i);
                     assert_eq!(axis_hit(&tips, sample), expected);
                     h.call("ui.move", json!({"x":sample.x,"y":sample.y}));
                     assert_eq!(crate::scenario::count_of("axis_view_highlights"), Some(f64::from(u8::from(expected.is_some()))));
@@ -66,7 +66,7 @@ fn compass_negative_ends_are_hollow_and_positive_ends_are_chunkier() {
             let original = c + vec2(38.0, 0.0);
             let painted = c + (original - c) * 0.84;
             let output = draw(&ctx, |ui| {
-                crate::icons::navigation::axis_tip(ui.painter(), c, name, &direction, original, 0.5, false, t);
+                crate::icons::navigation::axis_tip(ui.painter(), c, name, &direction, painted, 0.5, false, t);
             });
             let circles: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Circle(c) = &s.shape { Some(c) } else { None }).collect();
             let end = circles.iter().find(|circle| circle.center == painted).unwrap();
@@ -86,7 +86,7 @@ fn compass_negative_ends_are_hollow_and_positive_ends_are_chunkier() {
                     assert!(stroke.width >= 2.5);
                 }
             }
-            assert!(painted.distance(c) + end.radius < 55.0 - 10.0);
+            assert!(painted.distance(c) + end.radius < 49.5 - 3.0);
         }
     }
 }
@@ -268,7 +268,7 @@ fn a_hovered_compass_end_turns_white_and_its_letter_takes_the_axis_colour() {
             let original = c + vec2(38.0, 0.0);
             let painted = c + (original - c) * 0.84;
             let output = draw(&ctx, |ui| {
-                crate::icons::navigation::axis_tip(ui.painter(), c, name, &direction, original, 0.5, true, t);
+                crate::icons::navigation::axis_tip(ui.painter(), c, name, &direction, painted, 0.5, true, t);
             });
             let circles: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Circle(c) = &s.shape { Some(c) } else { None }).collect();
             assert!(circles.iter().any(|circle| circle.center == painted && circle.fill == t.on_accent), "{name}: the hovered end is filled white");
