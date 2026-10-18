@@ -1,5 +1,7 @@
 //! Building bodies: extrude and revolve planar regions, primitives.
 
+mod taper_corners;
+
 use mt::builder;
 use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
@@ -1241,6 +1243,9 @@ pub fn extrude_tapered(plane: &Plane, region: &Region2, length: f64, dir_sign: f
 /// straight for that height above `from` and only then slope, up to the same top: a face the
 /// solid stands on can then be pushed into the body it joins, as a prism's can.
 pub fn extrude_tapered_between(plane: &Plane, region: &Region2, from: f64, to: f64, foot: f64, dir_sign: f64, taper: f64) -> Result<Body> {
+    if !frame_ok(plane) || !dir_sign.is_finite() || dir_sign == 0.0 {
+        return Err(KernelError::Invalid("extrude frame or direction is not finite and orthonormal".into()));
+    }
     let (from, to, foot, taper) = (finite(from, "start")?, finite(to, "distance")?, finite(foot, "foot")?, finite(taper, "taper")?);
     if to - from <= 1e-6 {
         return Err(KernelError::Invalid("extrude distance is zero".into()));
@@ -1255,6 +1260,9 @@ pub fn extrude_tapered_between(plane: &Plane, region: &Region2, from: f64, to: f
     let (t, sign) = (taper.tan(), dir_sign.signum());
     let (bottom_plane, top_plane) = (plane.offset(from * sign), plane.offset(to * sign));
     let loops0 = oriented(region)?;
+    if t != 0.0 && taper_corners::needed(&loops0) {
+        return taper_corners::extrude(plane, &loops0, from, to, foot, sign, t);
+    }
     let split: Vec<(Loop2, Vec<usize>)> = loops0.loops().map(|l| offset_splits(&l.lp, from.abs().max(to.abs()) * t)).collect();
     let ends = |h: f64| split.iter().map(|(lp, _)| offset_loop(lp, h * t)).collect::<Result<Vec<_>>>();
     let (bottoms, tops) = (ends(from)?, ends(to)?);
