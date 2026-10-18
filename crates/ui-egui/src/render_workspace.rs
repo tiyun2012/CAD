@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Sense};
 use serde_json::json;
 use solidcraft_engine::doc::render_settings::RenderSetup;
+use solidcraft_engine::render::job::ImageHost;
 use solidcraft_engine::render::{
     Availability, Camera, ExecutorDescriptor, ExecutorId, ProductScene, RenderLimits, RenderMode, RenderOperation, RenderProfile, RenderRequest,
     ScratchLayout,
@@ -22,6 +23,7 @@ mod tests;
 
 pub struct State {
     pub host: Option<ExecutorDescriptor>,
+    pub path_host: PathHost,
     pub image_host: Option<solidcraft_engine::render::job::CpuHost>,
     pub view: ViewState,
     revision: u64,
@@ -30,6 +32,53 @@ pub struct State {
     key: Option<u64>,
     scene_signature: Option<(u64, usize, u64)>,
     scene: Option<ProductScene>,
+    image: Option<(solidcraft_engine::render::job::JobId, Result<egui::TextureHandle, String>)>,
+}
+
+/// Application-wide setup, retained across document changes. The worker owns a
+/// cloned adapter and initializes the job device; the UI receives the finished host.
+#[derive(Default)]
+pub enum PathHost {
+    #[default]
+    NotStarted,
+    Preparing(std::sync::mpsc::Receiver<Result<ImageHost, String>>),
+    Ready(ImageHost),
+    Failed(String),
+}
+
+impl PathHost {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn start(&mut self, create: impl FnOnce() -> Result<ImageHost, String> + Send + 'static) {
+        if !matches!(self, Self::NotStarted) {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Dropping the handle detaches: neither startup nor shutdown joins a driver
+        // that may spend minutes compiling or warming up its pipelines.
+        *self = match std::thread::Builder::new().name("gpu-path-setup".into()).spawn(move || {
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(create)).unwrap_or_else(|_| Err("GPU path tracer setup panicked".into()));
+            let _ = tx.send(result);
+        }) {
+            Ok(_) => Self::Preparing(rx),
+            Err(e) => Self::failed(format!("could not start setup worker: {e}")),
+        };
+    }
+
+    fn failed(message: String) -> Self {
+        log::warn!("progressive render unavailable: {message}");
+        Self::Failed(message)
+    }
+
+    fn poll(&mut self) {
+        let Self::Preparing(rx) = self else { return };
+        *self = match rx.try_recv() {
+            Ok(Ok(host)) => Self::Ready(host),
+            Ok(Err(error)) => Self::failed(error),
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Self::failed("setup worker stopped without returning a host".into()),
+        };
+    }
 }
 
 /// Small per-document editor state; GPU uploads and host capabilities stay outside tabs.
@@ -41,12 +90,24 @@ pub struct ViewState {
     job: Option<solidcraft_engine::render::job::JobId>,
     completed: Option<solidcraft_engine::render::job::JobId>,
     transparent: bool,
+    progressive: bool,
+    samples: u32,
     overwrite: bool,
 }
 
 impl Default for ViewState {
     fn default() -> Self {
-        Self { name: "Studio".into(), draft: RenderSetup::default(), dirty: false, job: None, completed: None, transparent: false, overwrite: false }
+        Self {
+            name: "Studio".into(),
+            draft: RenderSetup::default(),
+            dirty: false,
+            job: None,
+            completed: None,
+            transparent: false,
+            progressive: false,
+            samples: 64,
+            overwrite: false,
+        }
     }
 }
 
@@ -54,6 +115,7 @@ impl Default for State {
     fn default() -> Self {
         Self {
             host: None,
+            path_host: PathHost::default(),
             image_host: None,
             view: Default::default(),
             revision: u64::MAX,
@@ -62,6 +124,7 @@ impl Default for State {
             key: None,
             scene_signature: None,
             scene: None,
+            image: None,
         }
     }
 }
@@ -98,6 +161,14 @@ pub fn host_executor(max_dimension: u32, depth: bool, samples: u32) -> Result<Ex
 }
 
 pub fn sync_backend(app: &mut SolveApp) {
+    app.render_workspace.path_host.poll();
+    if let PathHost::Ready(host) = &app.render_workspace.path_host
+        && let Err(e) = app.session.register_render_job_host(host.clone())
+    {
+        app.render_workspace.path_host = PathHost::failed(e.to_string());
+        app.set_status(e.to_string(), true);
+    }
+
     if app.session.render_job_host().is_none()
         && let Some(host) = &app.render_workspace.image_host
         && let Err(e) = app.session.set_render_job_host(Some(host.clone()))
@@ -115,6 +186,10 @@ pub fn sync_backend(app: &mut SolveApp) {
 /// Cooperative work belongs to the frame loop, never to a status/control request. Keep
 /// scheduling frames even after leaving Render so a browser job can finish in Design.
 pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
+    if matches!(app.render_workspace.path_host, PathHost::Preparing(_)) {
+        // Poll even in Design or an idle window, without continuously redrawing.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
     if let Some(host) = &app.render_workspace.image_host {
         match host.pump(1024) {
             Ok(true) => ctx.request_repaint(),
@@ -127,7 +202,8 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
 pub fn reset_document(app: &mut SolveApp) {
     let host = app.render_workspace.host.clone();
     let image_host = app.render_workspace.image_host.clone();
-    app.render_workspace = State { host, image_host, ..Default::default() };
+    let path_host = std::mem::take(&mut app.render_workspace.path_host);
+    app.render_workspace = State { host, image_host, path_host, ..Default::default() };
     if active(app) {
         app.ui.tab = "SOLID".into();
     }
@@ -255,7 +331,7 @@ pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
 
 fn image_controls(app: &mut SolveApp, ui: &mut egui::Ui) {
     ui.heading(app.tr("render.image_title"));
-    ui.small(app.tr("render.opaque_image_summary"));
+    ui.small(app.tr(if app.render_workspace.view.progressive { "render.progressive_image_summary" } else { "render.opaque_image_summary" }));
     ui.horizontal(|ui| {
         ui.label(app.tr("render.image_width"));
         if ui.add(egui::DragValue::new(&mut app.render_workspace.view.draft.width).range(1..=4096)).changed() {
@@ -278,11 +354,28 @@ fn image_controls(app: &mut SolveApp, ui: &mut egui::Ui) {
             app.render_workspace.view.dirty = true;
         }
     }
+    match &app.render_workspace.path_host {
+        PathHost::Preparing(_) => {
+            ui.label(app.tr("render.gpu_path_preparing"));
+        }
+        PathHost::Failed(error) => {
+            ui.label(format!("{}: {error}", app.tr("render.gpu_path_failed")));
+        }
+        _ => {}
+    }
+    if matches!(app.render_workspace.path_host, PathHost::Ready(_)) {
+        let label = app.tr("render.image_progressive").to_string();
+        ui.checkbox(&mut app.render_workspace.view.progressive, label);
+        if app.render_workspace.view.progressive {
+            let label = app.tr("render.image_samples").to_string();
+            ui.add(egui::Slider::new(&mut app.render_workspace.view.samples, 1..=4096).logarithmic(true).text(label));
+        }
+    }
     let transparent_label = app.tr("render.image_transparent").to_string();
     ui.checkbox(&mut app.render_workspace.view.transparent, transparent_label);
     if ui.button(app.tr("render.image_check")).clicked() {
         let settings = RenderSetup { camera: app.cam, ..app.render_workspace.view.draft.clone() };
-        if app.run("render.preflight", json!({"settings":settings,"transparent_background":app.render_workspace.view.transparent})).is_ok() {
+        if app.run("render.preflight", json!({"settings":settings,"transparent_background":app.render_workspace.view.transparent,"progressive":app.render_workspace.view.progressive,"samples":app.render_workspace.view.progressive.then_some(app.render_workspace.view.samples)})).is_ok() {
             app.set_status(app.tr("render.image_supported").to_string(), false);
         }
     }
@@ -334,7 +427,7 @@ fn image_controls(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     if ui.add_enabled(!busy, egui::Button::new(app.tr("render.image_start"))).clicked() {
         let settings = RenderSetup { camera: app.cam, ..app.render_workspace.view.draft.clone() };
-        if let Ok(reply) = app.run("render.start", json!({"settings":settings,"transparent_background":app.render_workspace.view.transparent})) {
+        if let Ok(reply) = app.run("render.start", json!({"settings":settings,"transparent_background":app.render_workspace.view.transparent,"progressive":app.render_workspace.view.progressive,"samples":app.render_workspace.view.progressive.then_some(app.render_workspace.view.samples)})) {
             app.render_workspace.view.job = serde_json::from_value(reply["job"].clone()).ok();
             ui.ctx().request_repaint();
         }
@@ -346,6 +439,56 @@ fn image_controls(app: &mut SolveApp, ui: &mut egui::Ui) {
     {
         export_image(app, job, app.render_workspace.view.overwrite);
     }
+    completed_image(app, ui);
+}
+
+/// The job currently publishes a PNG only after encoding completes. Decode/upload once per
+/// completed job, not once per UI frame; keep the last exportable image during a new render.
+fn completed_image(app: &mut SolveApp, ui: &mut egui::Ui) {
+    let Some(job) = app.render_workspace.view.completed else {
+        app.render_workspace.image = None;
+        return;
+    };
+    if app.render_workspace.image.as_ref().is_none_or(|(old, _)| *old != job) {
+        let result = (|| -> Result<egui::TextureHandle, String> {
+            let handle = app.session.render_job_handle(job).map_err(|e| e.to_string())?;
+            let frame = handle.frame().map_err(|e| e.to_string())?.ok_or("render has no completed image")?;
+            let image = decode_image(frame.png(), frame.info.width, frame.info.height)?;
+            Ok(ui.ctx().load_texture("sc_render_image", image, egui::TextureOptions::LINEAR))
+        })();
+        // Cache errors too, so a bad frame cannot repeatedly allocate or decode on repaint.
+        app.render_workspace.image = Some((job, result));
+    }
+    if let Some((_, image)) = &app.render_workspace.image {
+        match image {
+            Ok(texture) => {
+                ui.add(egui::Image::new(texture).max_size(egui::vec2(ui.available_width(), 240.0)).shrink_to_fit())
+                    .on_hover_text(app.tr("render.image_completed"));
+            }
+            Err(error) => {
+                ui.label(error);
+            }
+        }
+    }
+}
+
+fn decode_image(png: &[u8], width: u32, height: u32) -> Result<egui::ColorImage, String> {
+    let size = (u64::from(width), u64::from(height));
+    let budget = RenderLimits::default();
+    if budget.fit(size.0, size.1, None) != Some(size) {
+        return Err("render image exceeds preview limits".into());
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(width);
+    limits.max_image_height = Some(height);
+    limits.max_alloc = Some(budget.max_pixels * 16);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
+    if image.dimensions() != (width, height) {
+        return Err("render image dimensions do not match its job".into());
+    }
+    Ok(egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], image.as_raw()))
 }
 
 /// Keep the selected image and overwrite consent fixed while the upstream picker holds model input.
