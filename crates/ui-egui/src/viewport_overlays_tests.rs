@@ -287,3 +287,24 @@ fn a_hovered_compass_end_turns_white_and_its_letter_takes_the_axis_colour() {
         }
     }
 }
+
+#[test]
+fn compass_circle_grabs_on_hover_and_the_home_chip_points() {
+    let mut h = Harness::new();
+    h.call("ui.set", json!({"layout": "floating"}));
+    h.settle();
+    let outer = crate::scenario::rect_of("axis_view:outer").unwrap();
+    let centre = outer.center() - vec2(0.0, crate::viewport::AXIS_CENTER_LIFT);
+    // A point inside the circle that is clear of every axis end and of the home chip.
+    let probe = centre + vec2(-36.0, 30.0);
+    h.call("ui.move", json!({"x": probe.x, "y": probe.y}));
+    h.settle();
+    assert_eq!(h.output.cursor_icon, egui::CursorIcon::Grab, "an open hand over the circle");
+    let home = crate::scenario::handle_at("axis_view:home").unwrap();
+    h.call("ui.move", json!({"x": home.x, "y": home.y}));
+    h.settle();
+    assert_eq!(h.output.cursor_icon, egui::CursorIcon::PointingHand, "a pointer on the home chip");
+    h.call("ui.move", json!({"x": centre.x - 200.0, "y": centre.y + 200.0}));
+    h.settle();
+    assert_ne!(h.output.cursor_icon, egui::CursorIcon::Grab, "no hand away from the compass");
+}

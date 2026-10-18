@@ -3389,7 +3389,10 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|p| ui.is_enabled() && ui.rect_contains_pointer(rect) && !crate::shell::covered(app, *p));
     let hovered = if orbiting { None } else { hover.and_then(|p| axis_hit(&tips, p)) };
     let painter = ui.painter_at(rect);
-    painter.circle(c, 49.5, t.overlay.gamma_multiply(0.35), Stroke::new(1.0, t.border.gamma_multiply(0.75)));
+    // Anywhere in the compass circle drags the view; the circle turns fully opaque under the pointer.
+    let in_circle = hover.is_some_and(|p| p.distance(c) <= 49.5);
+    let fill = if in_circle || orbiting { 1.0 } else { 0.35 };
+    painter.circle(c, 49.5, t.overlay.gamma_multiply(fill), Stroke::new(1.0, t.border.gamma_multiply(0.75)));
     for (i, (name, d, at, depth)) in tips.iter().enumerate() {
         if i == 3 {
             // The origin dot sits behind the three front axes and over the three back ones.
@@ -3430,6 +3433,15 @@ fn signed_axis_view(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect) {
     // The home button sits in its own small round chip.
     painter.circle(home.center(), 12.0, t.overlay.gamma_multiply(if hr.hovered() { 0.9 } else { 0.5 }), Stroke::new(1.0, t.border));
     icons::paint(&painter, home, "home", t.icon, if hr.hovered() { t.accent_soft } else { t.overlay }, t.accent);
+    // Cursors: a grabbing hand while orbiting, an open hand over the circle, a pointer on the home
+    // chip (the axis ends keep their pointing hand).
+    if hr.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    } else if orbiting {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if in_circle && hovered.is_none() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
     if hr.on_hover_text(crate::i18n::tr_label("Home view")).clicked() {
         app.animate_view("home");
     }
