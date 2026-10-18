@@ -1563,5 +1563,7 @@
   "update.title": "アップデートがあります",
   "update.up_to_date": "SolidCraft は最新です。",
   "update.update_now": "今すぐ更新",
-  "update.you_have": "現在のバージョンは {version} です。"
+  "update.you_have": "現在のバージョンは {version} です。",
+  "workspace.manufacture": "Manufacture",
+  "manufacture.enter_blocked": "Finish the current operation before entering Manufacture."
 }
