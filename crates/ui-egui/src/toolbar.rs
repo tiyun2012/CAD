@@ -1196,7 +1196,11 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
         (t.border, t.panel_header, t.border, t.text_dim)
     };
     let ir = Rect::from_center_size(pos2(rect.left() + 6.0 + 9.0, rect.center().y), vec2(18.0, 18.0));
-    icons::paint(p, ir, c.icon, ink, fill, acc);
+    if c.id == "inspect.colored_components" && app.session.colored_components.is_some() {
+        p.text(ir.center(), Align2::CENTER_CENTER, "✓", FontId::proportional(16.0), t.accent);
+    } else {
+        icons::paint(p, ir, c.icon, ink, fill, acc);
+    }
     p.text(pos2(ir.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &label, FontId::proportional(13.0), text);
     if let Some(k) = c.shortcut {
         p.text(pos2(pr.left() - 4.0, rect.center().y), Align2::RIGHT_CENTER, k, FontId::proportional(13.0), t.text_dim);
