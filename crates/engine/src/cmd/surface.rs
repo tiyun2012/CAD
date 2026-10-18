@@ -1534,6 +1534,58 @@ mod tests {
         );
     }
 
+    /// `surface.blend` between two tube rims: each rim runs along both halves of its tube's wall
+    /// (two faces), the rims are closed, and the blend is the wall between them, straight up the
+    /// axis. Picked `seam` points turn it, are saved with the design, and a closed rim does not
+    /// blend to an open edge.
+    #[test]
+    fn surface_blend_bridges_two_tube_rims() {
+        let mut s = Session::default();
+        run(&mut s, "solid.cylinder", json!({"radius": 10, "height": 30, "body_name": "Low"}));
+        run(&mut s, "surface.unstitch", json!({"body": "Low", "faces": [[0, 0, 30]]}));
+        run(&mut s, "solid.cylinder", json!({"radius": 10, "height": 30, "base": [0, 0, 40], "body_name": "High"}));
+        run(&mut s, "surface.unstitch", json!({"body": "High", "faces": [[0, 0, 40]]}));
+        let rim = |z: f64| -> Value {
+            json!((0..8).map(|k| f64::from(k) * 0.785 + 0.1).map(|a| json!([10.0 * a.cos(), 10.0 * a.sin(), z])).collect::<Vec<_>>())
+        };
+        // Unstitching keeps the wall under the body's own name.
+        let (low, high) = ("Low", "High");
+        let blend = json!({"from": {"body": low, "edges": rim(30.0)}, "to": {"body": high, "edges": rim(40.0)}, "continuity": ["g1", "g1"], "body_name": "Neck"});
+        run(&mut s, "surface.blend", blend.clone());
+        // The wall between: radius 10 and straight up, so 2π·10·10 of area.
+        let want = 2.0 * std::f64::consts::PI * 100.0;
+        assert!((area(&s, "Neck") - want).abs() < want * 1e-3, "{} vs {want}", area(&s, "Neck"));
+        let turn = |s: &Session, name: &str| {
+            let grid = solidcraft_kernel::sample_grid(&s.world_state().body(name).unwrap().body, 17, 5).unwrap();
+            grid.iter()
+                .map(|row| {
+                    let (a, b) = (row[0], row[row.len() - 1]);
+                    (a.y.atan2(a.x) - b.y.atan2(b.x)).rem_euclid(std::f64::consts::TAU).to_degrees()
+                })
+                .map(|d| d.min(360.0 - d))
+                .fold(0.0, f64::max)
+        };
+        assert!(turn(&s, "Neck") < 0.1, "straight up the axis: {}°", turn(&s, "Neck"));
+        // Seams a quarter apart: the blend turns a quarter round, and reads back the same.
+        let mut turned = blend.clone();
+        turned["seam"] = json!([[10, 0, 30], [0, 10, 40]]);
+        turned["body_name"] = json!("Twist");
+        run(&mut s, "surface.blend", turned);
+        assert!((turn(&s, "Twist") - 90.0).abs() < 0.1, "{}°", turn(&s, "Twist"));
+        assert!(s.doc.to_json().contains("\"seam\""), "the seam is saved");
+        let cold = Session::new(solidcraft_doc::Document::from_json(&s.doc.to_json()).unwrap());
+        assert!((turn(&cold, "Twist") - 90.0).abs() < 0.1, "read back: {}°", turn(&cold, "Twist"));
+        // A closed rim does not blend to an open edge; a seam that is not two points is refused.
+        run(&mut s, "solid.box", json!({"length": 40, "width": 10, "height": 10, "corner": [-20, 30, 30], "body_name": "Block"}));
+        let open = s.execute("surface.blend", &json!({"from": {"body": low, "edges": rim(30.0)}, "to": {"body": "Block", "edges": [[0, 30, 40]]}}));
+        assert!(open.as_ref().is_err_and(|e| e.to_string().contains("closed chain")), "{open:?}");
+        for seam in [json!([[0, 0, 0]]), json!("x"), json!([[0, 0, 0], "y"])] {
+            let mut bad = blend.clone();
+            bad["seam"] = seam.clone();
+            assert!(s.execute("surface.blend", &bad).is_err(), "{seam}");
+        }
+    }
+
     /// A tube whose top face is taken off (`surface.unstitch`), and points round its rim.
     fn open_tube() -> (Session, Value) {
         let mut s = Session::default();
