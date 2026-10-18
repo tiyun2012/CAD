@@ -1422,15 +1422,12 @@ pub(crate) fn val(vals: &BTreeMap<String, Value>, e: &str, k: Kind) -> Result<f6
     Document::eval_in(vals, e, k)
 }
 
-/// A loft builds each section from its outline alone, so a section with a hole (a ring) is
-/// refused rather than lofted as if it were filled.
+/// Collapsing the outline and its holes onto one apex cannot make a manifold solid.
 fn refuse_loft_holes(r: &Region2) -> Result<()> {
     if r.holes.is_empty() {
         return Ok(());
     }
-    Err(DocError::Invalid(
-        "not supported yet: a loft section with a hole; loft the outline and the hole as two bodies and cut one from the other".into(),
-    ))
+    Err(DocError::Invalid("not supported yet: lofting a section with holes to a point".into()))
 }
 
 pub fn select_profiles(ss: &SolvedSketch, sel: &ProfileSel) -> Result<Vec<Region2>> {
@@ -3723,14 +3720,15 @@ fn feature_tools_with_constructor(
                     .ok_or_else(|| DocError::Unknown(format!("sketch {} (it must come earlier in the timeline)", sec.sketch)))?;
                 let regions = solidcraft_sketch::merge_regions(&select_profiles(ss, &sec.profiles)?);
                 let [r] = &regions[..] else { return Err(DocError::Invalid("each loft section must be one profile".into())) };
-                refuse_loft_holes(r)?;
-                secs.push((ss.plane, r.outer.clone()));
+                secs.push((ss.plane, r.clone()));
                 sketches.push(ss);
             }
             // Its caps are the first and last sections, its sides named by the curves they run
             // between.
-            let body = kernel::loft(&secs)?;
-            let roles = crate::lineage::SectionRoles { sections: sketches.into_iter().zip(secs.iter().map(|(_, lp)| lp)).collect() };
+            let body = kernel::loft_regions(&secs)?;
+            let roles = crate::lineage::SectionRoles {
+                sections: sketches.into_iter().zip(secs.iter().map(|(_, r)| std::iter::once(&r.outer).chain(&r.holes).collect())).collect(),
+            };
             Ok(vec![roles.tool(body)])
         }
         FeatureKind::Sweep { sketch, profiles, path_sketch, path, orientation, twist, scale, rails, rail_fit, .. } => {
