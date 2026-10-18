@@ -447,6 +447,7 @@ pub fn tool_for(id: &str) -> Option<Tool> {
         pts: Vec::new(),
         hover: None,
         picks: Vec::new(),
+        point_picks: Vec::new(),
         dims: Vec::new(),
         dim_history: Vec::new(),
         dims_stage: usize::MAX,
@@ -1129,6 +1130,10 @@ fn glyphs(app: &SolveApp, painter: &egui::Painter, proj: &Proj, hover: Option<Po
 fn constraint_entities(k: &solidcraft_engine::sketch::ConstraintKind) -> (Vec<usize>, Vec<usize>) {
     use solidcraft_engine::sketch::ConstraintKind::*;
     match *k {
+        Alignment { .. } => {
+            let (ps, cs) = k.indices();
+            (cs, ps)
+        }
         Coincident { p, q } | HorizontalPoints { p, q } | VerticalPoints { p, q } => (vec![], vec![p, q]),
         PatternPoint { p, q, center, directions, .. } => {
             (directions.into_iter().flatten().map(|(l, _)| l).collect(), vec![p, q].into_iter().chain(center).collect())
@@ -1173,6 +1178,7 @@ fn glyph_anchors(sk: &solidcraft_engine::sketch::Sketch, k: &solidcraft_engine::
         Coincident { p, .. } | Fix { p } | Midpoint { p, .. } | PointOnCurve { p, .. } => pt(p).into_iter().collect(),
         PatternPoint { p, center, .. } => pt(center.unwrap_or(p)).into_iter().collect(),
         PatternRadius { .. } => Vec::new(),
+        Alignment { a, b, .. } => a.position(sk).zip(b.position(sk)).map(|(a, b)| ((a + b) * 0.5, None)).into_iter().collect(),
         HorizontalPoints { p, q } | VerticalPoints { p, q } | Symmetric { p, q, .. } => {
             sk.point(p).zip(sk.point(q)).map(|(a, b)| ((a + b) * 0.5, None)).into_iter().collect()
         }

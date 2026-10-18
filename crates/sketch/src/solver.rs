@@ -457,6 +457,11 @@ fn residuals(s: &State, k: &ConstraintKind, out: &mut Vec<f64>) {
             let (a, b) = s.line(l);
             out.push(b.x - a.x);
         }
+        Alignment { a, b, horizontal } => {
+            let at = |r: crate::PointRef| r.evaluate(s.sk, |p| Some(s.p(p))).unwrap_or_default();
+            let d = at(b) - at(a);
+            out.push(if horizontal { d.y } else { d.x });
+        }
         HorizontalPoints { p, q } => out.push(s.p(q).y - s.p(p).y),
         VerticalPoints { p, q } => out.push(s.p(q).x - s.p(p).x),
         Parallel { a, b } | Perpendicular { a, b } => {
@@ -801,6 +806,13 @@ fn block_refs(sk: &Sketch, b: &Block) -> Vec<Ref> {
             PatternPoint { p, q, center, directions, .. } => {
                 vec![P(p), P(q)].into_iter().chain(center.map(P)).chain(directions.into_iter().flatten().map(|(l, _)| L(l))).collect()
             }
+            Alignment { a, b, .. } => [a, b]
+                .into_iter()
+                .map(|r| match r {
+                    crate::PointRef::Point { p } => P(p),
+                    crate::PointRef::Midpoint { l } => L(l),
+                })
+                .collect(),
             PatternRadius { a, b } => vec![C(a), C(b)],
             Coincident { p, q }
             | HorizontalPoints { p, q }

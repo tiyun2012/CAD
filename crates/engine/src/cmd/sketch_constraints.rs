@@ -435,6 +435,7 @@ fn anchor(sk: &Sketch, k: &ConstraintKind) -> Option<Vec2> {
         PatternRadius { b, .. } => mid(b),
         Coincident { p, .. } | Fix { p } | Midpoint { p, .. } => pt(p),
         PointOnCurve { p, .. } => pt(p),
+        Alignment { a, b, .. } => Some((a.position(sk)? + b.position(sk)?) * 0.5),
         HorizontalPoints { p, q } | VerticalPoints { p, q } | Symmetric { p, q, .. } => Some((pt(p)? + pt(q)?) * 0.5),
         Horizontal { l } | Vertical { l } => mid(l),
         Parallel { a, .. } | Perpendicular { a, .. } | Collinear { a, .. } | Equal { a, .. } | Concentric { a, .. } | Angle { a, .. } => mid(a),
