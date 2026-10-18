@@ -122,6 +122,7 @@ pub mod palette;
 pub mod params_dialog;
 pub(crate) mod pick_buffer;
 pub(crate) mod pick_index;
+pub(crate) mod plugins;
 pub mod prefs;
 #[cfg(test)]
 mod preselect_tests;
