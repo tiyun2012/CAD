@@ -292,14 +292,17 @@ pub fn frames(face: &mt::Face, edges: &[mt::Edge], leave: Vec3, count: usize) ->
     let line = ChainLine::of(edges)?;
     let stations = line.stations(count, 0.0, false)?;
     let faces = vec![face; edges.len()];
-    frames_on(&faces, &stations, line.length(), leave)
+    frames_on(&faces, &stations, line.length(), leave, line.closed)
 }
 
 /// The frames at `stations` (points, each with the index of the chain edge it is on), each read
 /// on the support face of its own edge (`faces`, one per chain edge): a chain may run along the
-/// boundaries of several faces, a tube's rim along the halves of its wall. `length` is the
+/// boundaries of several faces, a tube's rim along the halves of its wall. A station on the
+/// vertex where two of those faces meet sits at a corner of one face's parameters, where the shape
+/// may not be readable along the leave direction; it is then read on the face of the neighbouring
+/// edge (the next one round, on a closed chain), which holds the same point. `length` is the
 /// chain's.
-fn frames_on(faces: &[&mt::Face], stations: &[(Vec3, usize)], length: f64, leave: Vec3) -> Result<Vec<Frame>> {
+fn frames_on(faces: &[&mt::Face], stations: &[(Vec3, usize)], length: f64, leave: Vec3, closed: bool) -> Result<Vec<Frame>> {
     let leave =
         leave.normalized().filter(|l| l.is_finite()).ok_or_else(|| KernelError::Invalid("the leave direction must be a finite vector".into()))?;
     let along = |n: Vec3| -> Result<Vec3> {
@@ -307,24 +310,43 @@ fn frames_on(faces: &[&mt::Face], stations: &[(Vec3, usize)], length: f64, leave
             .normalized()
             .ok_or_else(|| KernelError::Invalid("the leave direction is normal to the support surface: it has no tangent plane there".to_string()))
     };
-    // One support per distinct face, read in station order; the walk starts afresh on each face
-    // (a parameter hint means nothing on another surface).
+    // One support per distinct face; the walk starts afresh on each face (a parameter hint means
+    // nothing on another surface).
     let mut supports: Vec<(mt::FaceID, Support)> = Vec::new();
     let mut current: Option<mt::FaceID> = None;
     let mut walk = Walk::new(length);
+    let count = faces.len();
     let mut out = Vec::with_capacity(stations.len());
     for (p, edge) in stations {
-        let face = faces.get(*edge).ok_or_else(|| KernelError::Failed("bridge: a station's edge has no support face".into()))?;
-        let id = face.id();
-        if current != Some(id) {
-            walk = Walk::new(length);
-            current = Some(id);
+        // The station's own edge first, then its neighbours along the chain.
+        let neighbours = [
+            Some(*edge),
+            edge.checked_sub(1).or(closed.then(|| count.saturating_sub(1))),
+            Some(edge + 1).filter(|e| *e < count).or(closed.then_some(0)),
+        ];
+        let mut read: Option<Result<Frame>> = None;
+        for e in neighbours.into_iter().flatten() {
+            let Some(face) = faces.get(e) else { continue };
+            let id = face.id();
+            if !supports.iter().any(|(f, _)| *f == id) {
+                supports.push((id, Support::of(face, length)?));
+            }
+            let support = supports.iter().find(|(f, _)| *f == id).map(|(_, s)| s).ok_or_else(|| KernelError::Failed("bridge: support".into()))?;
+            if current != Some(id) {
+                walk = Walk::new(length);
+                current = Some(id);
+            }
+            let frame = support.station(*p, &along, &mut walk, true).map(|(f, _)| f);
+            let done = frame.is_ok();
+            // The first face's refusal is the one reported when no neighbour can read it either.
+            if done || read.is_none() {
+                read = Some(frame);
+            }
+            if done {
+                break;
+            }
         }
-        if !supports.iter().any(|(f, _)| *f == id) {
-            supports.push((id, Support::of(face, length)?));
-        }
-        let support = supports.iter().find(|(f, _)| *f == id).map(|(_, s)| s).ok_or_else(|| KernelError::Failed("bridge: support".into()))?;
-        out.push(support.station(*p, &along, &mut walk, true)?.0);
+        out.push(read.ok_or_else(|| KernelError::Failed("bridge: a station's edge has no support face".into()))??);
     }
     Ok(out)
 }
@@ -897,8 +919,8 @@ pub fn blend_between(
     let backwards_a = matches!(seam, Some([p, _]) if !line_a.closed && line_a.nearest(p) > line_a.length() / 2.0);
     let stations_a = line_a.stations(samples, start_a, backwards_a)?;
     let stations_b = pair_with(&stations_a, &line_b, seam.map(|[_, q]| q))?;
-    let frames_a = frames_on(&faces_a.iter().collect::<Vec<_>>(), &stations_a, line_a.length(), leave_a)?;
-    let frames_b = frames_on(&faces_b.iter().collect::<Vec<_>>(), &stations_b, line_b.length(), leave_b)?;
+    let frames_a = frames_on(&faces_a.iter().collect::<Vec<_>>(), &stations_a, line_a.length(), leave_a, line_a.closed)?;
+    let frames_b = frames_on(&faces_b.iter().collect::<Vec<_>>(), &stations_b, line_b.length(), leave_b, line_b.closed)?;
     let made = bridge(&frames_a, &frames_b, orders, crown)?;
     let gap = boundary_gap(&made, &chain_a, false)?.max(boundary_gap(&made, &chain_b, true)?);
     let faces: Vec<mt::Face> = made.solid.face_iter().cloned().collect();

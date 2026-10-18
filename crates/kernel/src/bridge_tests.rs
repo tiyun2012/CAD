@@ -363,3 +363,20 @@ fn a_picked_seam_sets_where_a_closed_blend_starts() {
     let bad = Some([Vec3::new(f64::NAN, 0.0, 30.0), quarter]);
     assert!(blend_between(&low, &rim_at(30.0), &high, &rim_at(40.0), [Continuity::G1; 2], [0.0, 0.0], None, bad, 65, false).is_err());
 }
+
+#[test]
+fn a_blend_between_offset_tubes_reads_stations_on_the_walls_seams() {
+    // A radius-10 tube and a radius-6 one standing 8 off its axis: the blend leaves each rim at an
+    // angle, so a station on the vertex where a wall's two halves meet is at a corner of one
+    // half's parameters. It is read on the other half, and the blend builds at every order.
+    let low = open_tube(0.0, 0.0, 30.0);
+    let high = cylinder(Vec3::new(8.0, 0.0, 50.0), Vec3::Z, 6.0, 25.0).unwrap();
+    let (_, high) = crate::surfaces::unstitch(&high, &[Vec3::new(8.0, 0.0, 50.0)]).unwrap();
+    let high = high.unwrap();
+    let rim6: Vec<Vec3> = rim_at(50.0).into_iter().map(|p| Vec3::new(8.0 + p.x * 0.6, p.y * 0.6, 50.0)).collect();
+    for orders in [[Continuity::G1; 2], [Continuity::G2; 2], [Continuity::G3; 2]] {
+        let made = blend_between(&low, &rim_at(30.0), &high, &rim6, orders, [0.0, 0.0], None, None, 41, false);
+        let (_, gap) = made.unwrap_or_else(|e| panic!("{orders:?}: {e:?}"));
+        assert!(gap < 1e-3, "{orders:?}: {gap}");
+    }
+}
