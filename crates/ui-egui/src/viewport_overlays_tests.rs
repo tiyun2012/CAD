@@ -273,6 +273,13 @@ fn a_hovered_compass_end_turns_white_and_its_letter_takes_the_axis_colour() {
             });
             let circles: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Circle(c) = &s.shape { Some(c) } else { None }).collect();
             assert!(circles.iter().any(|circle| circle.center == painted && circle.fill == t.on_accent), "{name}: the hovered end is filled white");
+            if !dark {
+                // White would vanish on the light compass: an axis-coloured outline keeps it visible.
+                assert!(
+                    circles.iter().any(|circle| circle.center == painted && circle.stroke.color == t.triad[0] && circle.stroke.width >= 2.0),
+                    "{name}: the hovered end is outlined in its axis colour on the light theme"
+                );
+            }
             let letters: Vec<_> = output.shapes.iter().filter_map(|s| if let Shape::Text(text) = &s.shape { Some(text) } else { None }).collect();
             if positive {
                 assert!(

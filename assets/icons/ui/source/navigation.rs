@@ -159,6 +159,7 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         t.triad[2]
     };
     let positive = !name.starts_with('-');
+    let light = t.panel.r() > 128;
     // Positive shafts are the full axis colour; negative ones are a dimmed tint (and any end
     // pointing away from the viewer dims further).
     let ink = if !positive || depth < -0.01 { col.gamma_multiply(0.55) } else { col };
@@ -179,6 +180,11 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
     if hovered {
         // Same outer size as the resting tip: a ring's outline is half its stroke outside.
         painter.circle_filled(at, if positive { radius } else { radius + 1.2 }, t.on_accent);
+        // On the light theme a white disc vanishes into the compass, so it carries an outline in
+        // the axis colour, drawn inside the disc so it does not grow.
+        if light && positive {
+            painter.circle_stroke(at, radius - 1.0, Stroke::new(2.0, col));
+        }
     }
     if positive {
         // The letters are heavy: egui's regular face gets a small overstrike for weight. On a
@@ -190,6 +196,19 @@ pub(crate) fn axis_tip(painter: &egui::Painter, c: Pos2, name: &str, d: &Vec3, a
         }
     }
     if !positive {
-        painter.circle_stroke(at, radius, Stroke::new(2.4, if hovered { t.on_accent } else { ink }));
+        painter.circle_stroke(
+            at,
+            radius,
+            Stroke::new(
+                2.4,
+                if !hovered {
+                    ink
+                } else if light {
+                    col
+                } else {
+                    t.on_accent
+                },
+            ),
+        );
     }
 }
