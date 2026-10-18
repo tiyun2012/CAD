@@ -82,6 +82,8 @@ pub mod loft_blend;
 mod loopblend;
 mod matchsurf;
 mod measure;
+#[cfg(test)]
+mod measure_placement_tests;
 mod mesh_convert;
 mod meshbody;
 #[cfg(test)]
