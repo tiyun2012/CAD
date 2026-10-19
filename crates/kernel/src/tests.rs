@@ -1977,6 +1977,53 @@ fn fillet_smooth_arc_and_line_loop_keeps_exact_removal() {
 }
 
 #[test]
+fn fillet_rounded_rectangle_with_tiny_end_edges() {
+    // #2498: the 4.29 mm corners leave 0.02 mm straight edges on an 8.6 mm end.
+    let (w, h, r, height) = (26.4, 8.6, 4.29, 8.4);
+    let p = |x, y| Vec2::new(10.0 + x, 10.0 + y);
+    let outline = Loop2 {
+        segs: vec![
+            Seg2::Line { a: p(r, 0.0), b: p(w - r, 0.0) },
+            Seg2::Arc { center: p(w - r, r), radius: r, start: -PI / 2.0, sweep: PI / 2.0 },
+            Seg2::Line { a: p(w, r), b: p(w, h - r) },
+            Seg2::Arc { center: p(w - r, h - r), radius: r, start: 0.0, sweep: PI / 2.0 },
+            Seg2::Line { a: p(w - r, h), b: p(r, h) },
+            Seg2::Arc { center: p(r, h - r), radius: r, start: PI / 2.0, sweep: PI / 2.0 },
+            Seg2::Line { a: p(0.0, h - r), b: p(0.0, r) },
+            Seg2::Arc { center: p(r, r), radius: r, start: PI, sweep: PI / 2.0 },
+        ],
+    };
+    let body = extrude(&Plane::XY, &[Region2 { outer: outline, holes: vec![] }], 0.0, height).unwrap().pop().unwrap();
+    let picks = [
+        Vec3::new(23.2, 10.0, 8.4),
+        Vec3::new(35.14348809129028, 11.25651190870971, 8.4),
+        Vec3::new(11.256511908709715, 11.256511908709712, 8.4),
+        Vec3::new(10.0, 14.3, 8.4),
+        Vec3::new(11.256511908709713, 17.343488091290293, 8.4),
+        Vec3::new(23.2, 18.6, 8.4),
+        Vec3::new(35.14348809129028, 17.34348809129029, 8.4),
+        Vec3::new(36.4, 14.3, 8.4),
+    ];
+    let radius = 2.0;
+    // Pappus: the removed cross-section swept along the straight sides and four quarters.
+    let area = radius * radius * (1.0 - PI / 4.0);
+    let centroid = radius * (10.0 - 3.0 * PI) / (3.0 * (4.0 - PI));
+    let removed = area * (2.0 * (w + h - 4.0 * r) + 2.0 * PI * (r - centroid));
+    let fine = |b: &Body| b.tessellate_with(1e-4, true).unwrap().measure().volume;
+    let initial = fine(&body);
+    // Every rim edge, the tiny end alone (tangent chain), and the opposite selection order.
+    for selection in [picks.to_vec(), vec![picks[3]], picks.into_iter().rev().collect()] {
+        let blended = fillet(&body, &selection, radius).unwrap();
+        assert!(blended.validity().is_empty(), "{:?}", blended.validity());
+        assert_eq!(blended.crossed_face_loops().unwrap(), 0);
+        assert_eq!((blended.face_count(), blended.edge_count(), blended.vertex_count()), (18, 40, 24));
+        let actual = initial - fine(&blended);
+        assert!(rel(actual, removed) < 1e-3, "{actual} vs {removed}");
+    }
+    assert!(fillet(&body, &picks, 9.0).is_err());
+}
+
+#[test]
 fn fillet_sharp_arc_and_arc_loop() {
     use solidcraft_geom::Seg2;
     // The intersection of two radius-10 disks whose centres are 10 mm apart.
