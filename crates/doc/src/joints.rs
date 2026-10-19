@@ -770,7 +770,10 @@ pub struct Solution {
     pub conflicts: Vec<(u64, String, String)>,
     /// Joints that could not be applied (bad origin…): (joint id, name, why).
     pub errors: Vec<(u64, String, String)>,
-    /// Remaining degrees of freedom per occurrence (6 = free, 0 = fixed).
+    /// Remaining degrees of freedom per occurrence (6 = free, 0 = fixed): how many independent
+    /// values still move it, from the fixed occurrences, with loops kept closed and a value a
+    /// motion link sets moving with the values its link chain starts from (a driven gear has its
+    /// driving gear's one, a screw's travel its turn's).
     pub dof: BTreeMap<u64, usize>,
     /// Occurrences fixed in place (grounded, or the root's).
     pub fixed: Vec<u64>,
@@ -959,6 +962,46 @@ fn link_chains(asm: &Assembly, tree: &Tree, around: &BTreeSet<u64>, linked: &BTr
         frontier = next;
     }
     (feeds, starts)
+}
+
+/// The values that move each value a motion link sets: the values its link chain starts from,
+/// which no link sets (none for a chain that comes back round on itself, which only a hand-edited
+/// design has). A driven gear's turn is its driving gear's: one degree of freedom, not two.
+fn link_sources(asm: &Assembly) -> BTreeMap<(u64, usize), BTreeSet<(u64, usize)>> {
+    let mut into: BTreeMap<(u64, usize), Vec<(u64, usize)>> = BTreeMap::new();
+    for l in &asm.links {
+        into.entry((l.b, l.ib)).or_default().push((l.a, l.ia));
+    }
+    let mut sources = BTreeMap::new();
+    if into.is_empty() {
+        return sources;
+    }
+    // A link from a value its joint doesn't have (a hand-edited design) moves nothing.
+    let real: BTreeSet<(u64, usize)> = asm.joints.iter().flat_map(|j| (0..j.kind.dofs().len()).map(|i| (j.id, i))).collect();
+    for &v in into.keys() {
+        // Back along the links, as far as a link chain carries a value (`MAX_LINK_PASSES`).
+        let (mut from, mut seen) = (BTreeSet::new(), BTreeSet::from([v]));
+        let mut frontier = vec![v];
+        for _ in 0..MAX_LINK_PASSES {
+            let mut next = Vec::new();
+            for w in frontier.iter().filter_map(|w| into.get(w)).flatten() {
+                if !seen.insert(*w) {
+                    continue;
+                }
+                if into.contains_key(w) {
+                    next.push(*w);
+                } else if real.contains(w) {
+                    from.insert(*w);
+                }
+            }
+            if next.is_empty() {
+                break;
+            }
+            frontier = next;
+        }
+        sources.insert(v, from);
+    }
+    sources
 }
 
 /// The held values among `touches` that move: (joint, index, from, to), `from` within the
@@ -1632,6 +1675,14 @@ fn build<'a>(doc: &'a Document, st: &ModelState, vals: &Values, sol: &mut Soluti
         Tree { joints: asm.joints.iter().map(|j| (j.id, j)).collect(), frames, fixed: placed.clone(), parent: BTreeMap::new(), order: Vec::new() };
     let mut used: BTreeSet<u64> = BTreeSet::new();
     let mut queue: VecDeque<u64> = placed.keys().copied().collect();
+    // An occurrence's degrees of freedom are the distinct values that move it: those of the
+    // joints on its path, a value a motion link sets standing for the values its link chain
+    // starts from (a driven gear turns with its driving gear's one value). Kept per occurrence as
+    // a count of the values no link reads or sets, which no other path value can repeat, and the
+    // set of the ones that may be repeated (links' sources).
+    let sources = link_sources(asm);
+    let shared: BTreeSet<(u64, usize)> = sources.values().flatten().copied().collect();
+    let mut moved_by: BTreeMap<u64, (usize, BTreeSet<(u64, usize)>)> = BTreeMap::new();
     // The joints at each occurrence, in the joints' order (a large assembly is not walked joint by
     // joint for every occurrence).
     let mut at: BTreeMap<u64, Vec<&Joint>> = BTreeMap::new();
@@ -1662,7 +1713,18 @@ fn build<'a>(doc: &'a Document, st: &ModelState, vals: &Values, sol: &mut Soluti
             placed.insert(other, m);
             tree.parent.insert(other, (occ, j.id, from_a));
             tree.order.push(other);
-            dof.insert(other, dof.get(&occ).copied().unwrap_or(0) + j.kind.dofs().len());
+            let (mut own, mut common) = moved_by.get(&occ).cloned().unwrap_or_default();
+            for v in (0..j.kind.dofs().len()).map(|i| (j.id, i)) {
+                match sources.get(&v) {
+                    Some(from) => common.extend(from.iter().copied()),
+                    None if shared.contains(&v) => {
+                        common.insert(v);
+                    }
+                    None => own += 1,
+                }
+            }
+            dof.insert(other, own + common.len());
+            moved_by.insert(other, (own, common));
             queue.push_back(other);
         }
     }
@@ -1774,6 +1836,26 @@ mod tests {
         let links =
             (1..n).rev().map(|a| MotionLink { a, ia: 0, b: a + 1, ib: 0, ratio: 2.0, offset: 0.0, coupling: None, lift: Vec::new() }).collect();
         Assembly { joints, links, ..Assembly::default() }
+    }
+
+    /// A linked value moves with the free value its chain starts from, however the chain is
+    /// stored; a chain that comes back round on itself, or a link from a value its joint lacks
+    /// (hand-edited designs), moves it with nothing.
+    #[test]
+    fn linked_values_move_with_their_chains_start() {
+        let mut asm = chain(5, 0.0);
+        let sources = link_sources(&asm);
+        for b in 2..=5 {
+            assert_eq!(sources.get(&(b, 0)), Some(&BTreeSet::from([(1, 0)])), "J{b}: {sources:?}");
+        }
+        assert!(!sources.contains_key(&(1, 0)));
+        let link = |a: u64, ia: usize, b: u64| MotionLink { a, ia, b, ib: 0, ratio: 1.0, offset: 0.0, coupling: None, lift: Vec::new() };
+        asm.links.push(link(5, 0, 1));
+        assert!(link_sources(&asm).values().all(BTreeSet::is_empty), "{:?}", link_sources(&asm));
+        let mut asm = chain(2, 0.0);
+        asm.links = vec![link(1, 7, 2)];
+        assert_eq!(link_sources(&asm).get(&(2, 0)), Some(&BTreeSet::new()));
+        assert!(link_sources(&Assembly::default()).is_empty());
     }
 
     /// Links carry a value down a chain stored from its end, each linked value within its limits
