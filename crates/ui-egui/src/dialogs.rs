@@ -4581,21 +4581,35 @@ pub(crate) fn edge_sel(s: &Session, p0: Vec3) -> Option<Sel> {
 
 /// The body face containing a point (nearest triangle).
 pub(crate) fn face_sel(s: &Session, p0: Vec3) -> Option<Sel> {
+    use solidcraft_engine::kernel::{self, FaceSurface};
+
+    if !p0.is_finite() {
+        return None;
+    }
     let st = s.world_state();
     let frames = stored_frames(s);
-    let mut best: Option<(f64, Sel)> = None;
+    let mut best: Option<(f64, &solidcraft_engine::doc::ModelBody, usize, Vec3)> = None;
     for b in &st.bodies {
         let p = stored_on(&frames, &b.name, p0);
         let m = b.mesh();
         for (t, f) in m.triangles.iter().zip(&m.tri_face) {
             let Some([a, bb, c]) = m.tri(t) else { continue };
             let d = crate::preview::point_triangle_dist(p, a, bb, c);
-            if best.as_ref().is_none_or(|(bd, _)| d < *bd) {
-                best = Some((d, Sel::Face { body: b.name.clone(), index: *f as usize, point: p }));
+            if best.as_ref().is_none_or(|(bd, _, _, _)| d < *bd) {
+                best = Some((d, b, *f as usize, p));
             }
         }
     }
-    best.filter(|(d, _)| *d < 1e-3 + 1e-6 * p0.len()).map(|x| x.1)
+    let (d, body, index, point) = best?;
+    let surface = kernel::guard("refill face surface", || Ok(kernel::face_surface(&body.body, index))).ok().flatten();
+    // A curved face's viewport pick can be a full chord tolerance from the reference
+    // facets. Planar and unclassified faces keep the tight limit so a stale pick cannot
+    // silently select a nearby plane, including a flat cap on an otherwise curved body.
+    let tolerance = match surface {
+        Some(FaceSurface::Plane { .. }) | None => 1e-3,
+        Some(_) => body.display_tol(),
+    } + 1e-6 * point.len();
+    (d <= tolerance).then(|| Sel::Face { body: body.name.clone(), index, point })
 }
 
 fn emboss_face_sel(s: &Session, component: u64, face: &solidcraft_engine::doc::EmbossFace, persistent: &str) -> Option<Sel> {

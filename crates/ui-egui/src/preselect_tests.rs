@@ -1083,6 +1083,97 @@ fn thread_size_suggestion_can_be_cleared_and_edited_in_the_dialog() {
 }
 
 #[test]
+fn modeled_thread_survives_timeline_double_click_and_ok() {
+    for (analytic_pick, change_length) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.app.apply_off_thread = Some(std::time::Duration::ZERO);
+        h.app.run("solid.cylinder", json!({"radius":4,"height":4})).unwrap();
+        let smooth_volume = h.app.session.world_state().body("Body1").unwrap().mesh().measure().volume;
+        let Sel::Face { point, .. } = thread_face(&h.app, "Body1") else { panic!("face") };
+        let point = if analytic_pick { Vec3::new(4.0, 0.0, 2.0) } else { point };
+        let id = h.app.run("solid.thread", json!({"face":point,"designation":"M8x1","modeled":true})).unwrap()["feature"].as_u64().unwrap();
+        let threaded_volume = h.app.session.world_state().body("Body1").unwrap().mesh().measure().volume;
+        assert!(smooth_volume - threaded_volume > 1.0);
+        h.frames(4);
+        h.step(&json!({"click":{"handle":"timeline:Thread1"},"double":true})).unwrap();
+        h.frames(4);
+        assert_eq!(h.app.dialog.as_ref().unwrap().extra["modeled"], true);
+        assert_eq!(h.app.dialog.as_ref().unwrap().editing, Some((id, None)));
+        assert_eq!(h.app.dialog.as_ref().unwrap().inputs[0].items.len(), 1, "the cylinder stays selected");
+        if change_length {
+            h.step(&json!({"click":{"handle":"dialog:Full Length"}})).unwrap();
+            h.step(&json!({"click":{"handle":"dialog:Length"}})).unwrap();
+            h.step(&json!({"key":"A","cmd":true})).unwrap();
+            h.step(&json!({"text":"2 mm"})).unwrap();
+        }
+        if h.app.dialog.as_ref().unwrap().previews() {
+            wait_feature_preview(&mut h);
+            assert_eq!(h.app.preview.replaced, ["Body1"]);
+        }
+        h.step(&json!({"widget":"OK"})).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while h.app.applying.is_some() && std::time::Instant::now() < deadline {
+            h.frames(1);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        h.frames(4);
+        assert!(h.app.dialog.is_none(), "{:?}", h.app.dialog);
+        assert!(h.app.applying.is_none() && !h.app.preview.active && h.app.preview.replaced.is_empty());
+        assert_eq!(h.app.session.doc.marker, None);
+        assert!(matches!(h.app.session.doc.feature(id).unwrap().kind, solidcraft_engine::doc::FeatureKind::Thread { modeled: true, .. }));
+        let result = h.app.session.model.result(id).unwrap();
+        assert!(!result.skipped && result.error.is_none(), "{result:?}");
+        let edited_volume = h.app.session.world_state().body("Body1").unwrap().mesh().measure().volume;
+        assert!(smooth_volume - edited_volume > 1.0, "the modeled cut disappeared: {smooth_volume} -> {edited_volume}");
+        if change_length {
+            assert!(edited_volume - threaded_volume > 1.0, "shortening the thread restores some material");
+        } else {
+            assert!((edited_volume - threaded_volume).abs() < 1e-6);
+        }
+        h.app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.app.session.doc.marker, None);
+        let restored = h.app.session.world_state().body("Body1").unwrap().mesh().measure().volume;
+        assert!((restored - threaded_volume).abs() < 1e-6, "one undo restores the original modeled thread");
+    }
+}
+
+#[test]
+fn planar_face_reopen_keeps_the_tight_pick_tolerance() {
+    for (command, mut params, point) in [
+        ("solid.box", json!({"length":100,"width":100,"height":100}), Vec3::new(50.0, 50.0, 100.0)),
+        ("solid.cylinder", json!({"radius":50,"height":100}), Vec3::new(0.0, 0.0, 100.0)),
+    ] {
+        let mut h = crate::scenario::Harness::new();
+        let base = h.app.run(command, params.clone()).unwrap()["feature"].clone();
+        let feature = h.app.run("solid.offset_face", json!({"faces":[point],"distance":2})).unwrap()["feature"].as_u64().unwrap();
+        h.app.edit_feature(feature);
+        assert_eq!(h.app.dialog.as_ref().unwrap().inputs[0].items.len(), 1, "an unchanged planar pick reopens");
+        crate::dialogs::cancel(&mut h.app);
+
+        // Move the upstream face away from its saved pick, but by less than the body's
+        // display tolerance. The cylinder case also checks planar caps on curved bodies.
+        params["height"] = json!(99.99);
+        h.app.run("timeline.redefine", json!({"feature":base,"command":command,"params":params})).unwrap();
+        h.app.edit_feature(feature);
+        assert!(h.app.session.world_state().body("Body1").unwrap().display_tol() > 0.01);
+        assert!(crate::dialogs::face_sel(&h.app.session, point - Vec3::Z * 0.01).is_some());
+        assert!(h.app.dialog.as_ref().unwrap().inputs[0].items.is_empty(), "{command}: a stale planar pick must stay empty");
+    }
+}
+
+#[test]
+fn curved_face_refill_keeps_its_pick_but_rejects_points_outside_the_mesh_tolerance() {
+    let mut app = app_with(json!([]));
+    app.run("solid.cylinder", json!({"radius":4,"height":4})).unwrap();
+    let point = Vec3::new(4.0, 0.0, 2.0);
+    let pick = crate::dialogs::face_sel(&app.session, point).unwrap();
+    assert!(matches!(pick, Sel::Face { point: kept, .. } if kept == point));
+    assert!(crate::dialogs::face_sel(&app.session, Vec3::new(4.1, 0.0, 2.0)).is_none());
+    assert!(crate::dialogs::face_sel(&app.session, Vec3::new(f64::NAN, 0.0, 2.0)).is_none());
+}
+
+#[test]
 fn thread_choices_apply_a_fine_pitch_and_partial_modelled_thread() {
     let mut h = crate::scenario::Harness::new();
     h.app.run("solid.cylinder", json!({"radius":4,"height":10})).unwrap();
