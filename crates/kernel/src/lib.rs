@@ -113,6 +113,7 @@ mod record;
 mod seam_faces;
 mod sew;
 mod smooth_edges;
+mod sphere_lens;
 mod spline_conv;
 mod splitface;
 mod step;
