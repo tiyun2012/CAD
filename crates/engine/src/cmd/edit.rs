@@ -41,9 +41,9 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("timeline.move_many", "Move Timeline Items", move_many).icon("reorder").params(
         "features?: [id|name], groups?: [folder ids], group?: folder id, position: insertion slot; atomically changes folder membership and moves all selected contents as one block",
     ),
-    CommandSpec::new("timeline.rollback", "Move Timeline Marker", rollback).icon("rollback").params("position: number of features to keep active (omit = end)"),
+    CommandSpec::new("timeline.rollback", "Move Timeline Marker", rollback).icon("rollback").params("position: number of features to keep active, or \"end\" (omit = end)"),
     CommandSpec::new("timeline.roll_to", "Roll History Marker", rollback).icon("rollback")
-        .params("position: number of features to keep active (omit = end) | feature: id|name (the marker goes right after it)"),
+        .params("position: number of features to keep active, or \"end\" (omit = end) | feature: id|name (the marker goes right after it)"),
     CommandSpec::new("timeline.reorder", "Reorder Feature", reorder).icon("reorder")
         .params("feature: id|name, position: its new index; refused when a feature that worked would fail"),
     CommandSpec::new("timeline.reorder_many", "Reorder Features", reorder_many).icon("reorder").params(
@@ -509,7 +509,17 @@ fn rollback(s: &mut Session, p: &Value) -> Result<Value> {
             let id = feature_id(s, Some(f), "timeline.roll_to")?;
             s.doc.feature_index(id).map(|i| i + 1)
         }
-        None => num(p, "position").map(|x| x.max(0.0) as usize),
+        // A number of features, or "end" (as omitting it); anything else is refused rather than
+        // read as "end".
+        None => match p.get("position") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(t)) if t.trim().eq_ignore_ascii_case("end") => None,
+            Some(v) => {
+                let x = v.as_f64().or_else(|| v.as_str().and_then(|t| t.trim().parse::<f64>().ok())).and_then(crate::params::finite);
+                let why = "`position` must be a number of features to keep active, or \"end\"";
+                Some(x.map(|x| x.max(0.0) as usize).ok_or_else(|| bad("timeline.roll_to", why))?)
+            }
+        },
     };
     s.doc_mut().marker = match pos {
         Some(k) if k < n => Some(k),

@@ -8,6 +8,28 @@ fn run(s: &mut Session, id: &str, params: Value) -> Value {
     s.execute(id, &params).unwrap_or_else(|e| panic!("{id} {params}: {e}"))
 }
 
+/// `timeline.roll_to` takes a number of features or "end"; any other value is refused instead of
+/// silently moving the marker to the end.
+#[test]
+fn roll_to_takes_a_number_or_end_and_refuses_anything_else() {
+    let mut s = Session::default();
+    run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10}));
+    run(&mut s, "solid.box", json!({"length": 5, "width": 5, "height": 20, "operation": "join"}));
+    for cmd in ["timeline.roll_to", "timeline.rollback"] {
+        assert_eq!(run(&mut s, cmd, json!({"position": 1}))["marker"], 1);
+        assert_eq!(run(&mut s, cmd, json!({"position": "end"}))["marker"], 2);
+        assert_eq!(run(&mut s, cmd, json!({"position": "1"}))["marker"], 1, "a number in a string is still a number");
+        assert_eq!(run(&mut s, cmd, json!({"position": "END"}))["marker"], 2);
+        run(&mut s, cmd, json!({"position": 1}));
+        for bad in [json!("start"), json!("first"), json!([1]), json!({"n": 1}), json!(true), json!("NaN")] {
+            let e = s.execute(cmd, &json!({"position": bad})).unwrap_err().to_string();
+            assert!(e.contains("`position` must be a number") && e.contains("\"end\""), "{bad}: {e}");
+            assert_eq!(s.doc.marker, Some(1), "{bad}: the refused call left the marker where it was");
+        }
+        assert_eq!(run(&mut s, cmd, json!({}))["marker"], 2, "omitted: the end");
+    }
+}
+
 #[test]
 fn g2_fillet_survives_edit_undo_and_reopen() {
     use solidcraft_doc::{Document, FeatureKind, FilletStyle};
