@@ -859,6 +859,15 @@ fn boolean_whole(a: &Body, b: &Body, op: BoolOp) -> Result<Option<Body>> {
 }
 
 fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -> Result<Option<Body>> {
+    boolean_whole_with(a, b, op, refine, &truck_boolean)
+}
+
+/// The whole-body strategies with the numerical intersection supplied separately, so tests
+/// can reproduce an empty numerical attempt without depending on a particular ray seed.
+fn boolean_whole_with<F>(a: &Body, b: &Body, op: BoolOp, refine: bool, intersect: &F) -> Result<Option<Body>>
+where
+    F: Fn(&Body, &Body, BoolOp, Option<mt::Vector3>, f64) -> Result<(Solid, Option<recorded::Shapeops>)>,
+{
     if let Some(body) = swept_prism(a, b, op) {
         return Ok(Some(body));
     }
@@ -961,7 +970,7 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
         // Bounded to two finer meshes; no tool displacement or relaxed acceptance tests.
         for k in [1e-5, 1e-6] {
             let tol = (size * k).max(1e-6);
-            if let Ok((solid, history)) = truck_boolean(a, b, op, None, tol)
+            if let Ok((solid, history)) = intersect(a, b, op, None, tol)
                 && !solid.boundaries().is_empty()
                 && let Ok(body) = guard("refined boolean result", || recorded::truck_result(solid, history, size, &keep, &counts))
                 && check(&body).0
@@ -1131,7 +1140,7 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
         for (attempt, j) in JITTER.iter().enumerate().take(2) {
             let shift = mt::Vector3::new(j[0], j[1], j[2]) * (feature * 0.01);
             for &tol in &fine_tols {
-                match truck_boolean(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol) {
+                match intersect(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol) {
                     Ok((s, _)) if s.boundaries().is_empty() || s.face_iter().next().is_none() => *last = "empty result".into(),
                     Ok((s, h)) => match guard("boolean result", || recorded::truck_result(s, h, size, &keep, &counts)) {
                         Ok(body) => {
@@ -1208,10 +1217,17 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
                 return Ok(r);
             }
         }
+        // An implausible empty result from the unshifted numerical tries must still give
+        // the exact strategies above a chance (#1765), including seam-face recovery. If none
+        // recovers it, keep the original candidate for the outer guard, before displaced retries.
+        if empty_votes >= 2 && op != BoolOp::Union {
+            merge(empty_diagnostics);
+            return Ok(None);
+        }
         let shift = mt::Vector3::new(j[0], j[1], j[2]) * (size * 0.01);
         for k in [2e-3, 5e-4] {
             let tol = (size * k).max(1e-5);
-            let r = truck_boolean(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol);
+            let r = intersect(a, b, op, if attempt > 0 { Some(shift) } else { None }, tol);
             match r {
                 Ok((s, _)) if s.boundaries().is_empty() || s.face_iter().next().is_none() => {
                     empty_votes += 1;
@@ -1254,6 +1270,9 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
         if empty_votes >= 2 && op != BoolOp::Union {
             if let Some(body) = fine(&mut last) {
                 return Ok(Some(body));
+            }
+            if attempt == 0 && crate::boolean_guard::check_retry(a, b, op, None).is_err() {
+                continue;
             }
             merge(empty_diagnostics);
             return Ok(None);
@@ -1962,6 +1981,10 @@ pub(crate) fn half_box(body: &Body, plane: &solidcraft_geom::Plane, positive: bo
     let (lo, hi) = if positive { (0.0, reach) } else { (-reach, 0.0) };
     crate::build::extrude(plane, std::slice::from_ref(&sq), lo, hi)?.pop().ok_or_else(|| KernelError::Failed("half space".into()))
 }
+
+#[cfg(test)]
+#[path = "empty_retry_tests.rs"]
+mod empty_retry_tests;
 
 #[cfg(test)]
 #[path = "prism_fast_path_tests.rs"]
