@@ -15,6 +15,7 @@ use crate::SolveApp;
 use crate::dialogs::{Dialog, Kind, combo, field, row_label};
 use crate::selection::{BODIES, SelInput};
 use crate::theme::Tokens;
+use solidcraft_engine::geom::Triangle;
 
 #[path = "configuration_rules_ui.rs"]
 mod configuration_rules_ui;
@@ -953,7 +954,7 @@ fn configurations_rows(
                                 let mut points = std::collections::BTreeMap::new();
                                 for (triangle, index) in mesh.triangles.iter().zip(&mesh.tri_face) {
                                     if let std::collections::btree_map::Entry::Vacant(entry) = points.entry(*index as usize)
-                                        && let Some([a, b, c]) = mesh.tri(triangle)
+                                        && let Some(Triangle([a, b, c])) = mesh.tri(triangle)
                                     {
                                         entry.insert((a + b + c) * (1. / 3.));
                                     }
