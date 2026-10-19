@@ -169,6 +169,7 @@ pub(crate) fn modifier_motion(
     let previous = app.viewport.modifier_nav;
     if previous.map(|(m, _)| m) != next.map(|(m, _)| m) {
         app.viewport.orbit_pivot = None;
+        app.viewport.orbit_from = None;
         app.viewport.orbit_free = None;
         app.viewport.orbit_snap = None;
     }
@@ -480,6 +481,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     }
     if !dragging && motion.is_none() {
         app.viewport.orbit_pivot = None;
+        app.viewport.orbit_from = None;
     }
     if app.viewport.spin {
         // A click on the navigation bar (its own button) is not a stop.
@@ -698,11 +700,32 @@ pub fn orbit(app: &mut SolveApp, rect: egui::Rect, dx: f64, dy: f64, press: Opti
             }
         }),
     };
-    let Some(pivot) = pivot else {
-        app.cam.orbit(dx, dy);
-        return;
+    // The drag's whole turn so far, applied to the camera it began with: the view depends on
+    // where the pointer is, not on the path it took, so fast or erratic drags (a pitch held at
+    // straight up or down for a while, many tiny steps) can't drift. Anything else that moves
+    // the camera meanwhile (a wheel zoom, a new pivot) starts the sum again from there.
+    let from = match app.viewport.orbit_from {
+        Some(f) if f.last == app.cam && f.pivot == pivot => f,
+        _ => OrbitFrom { start: app.cam, dx: 0.0, dy: 0.0, pivot, last: app.cam },
     };
-    app.cam.orbit_about(dx, dy, pivot);
+    let (dx, dy) = (from.dx + dx, from.dy + dy);
+    app.cam = from.start;
+    match pivot {
+        Some(p) => app.cam.orbit_about(dx, dy, p),
+        None => app.cam.orbit(dx, dy),
+    }
+    app.viewport.orbit_from = Some(OrbitFrom { dx, dy, last: app.cam, ..from });
+}
+
+/// An orbit drag so far: the camera it began with, the pointer's total motion since, the pivot
+/// and the camera that produced.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OrbitFrom {
+    start: Camera,
+    dx: f64,
+    dy: f64,
+    pivot: Option<Vec3>,
+    last: Camera,
 }
 
 #[cfg(test)]

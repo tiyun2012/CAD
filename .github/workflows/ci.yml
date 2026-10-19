@@ -14,6 +14,12 @@
 # main that a passing merge-queue run already tested runs only the repository checks; a push
 # that skipped the queue still runs everything. Pull requests run the reference tests when the
 # command line (or anything it depends on) changes, and doc tests for the affected packages.
+# Heavy checks wait for review: a pull request without the `approved-for-ci` label runs only
+# Select checks, the format and repository checks and a quick compile. Adding the label (after
+# review) runs everything above, and every later push to the PR does too. Pushes to main, merge
+# groups, the nightly run and Run workflow are not pull requests and always run the full suite.
+# GitHub cannot filter `labeled` events by label name, so any other label starts a run whose jobs
+# are all skipped; it gets its own concurrency group (below) so it never cancels the real run.
 # Cross-compilation is opt-in through Run workflow; release builds remain in release.yml.
 # Trusted runs use both pools: pushes to main, merge-queue groups and pull requests from a branch
 # of this repository (people with write access; fork pull requests never run on this machine).
@@ -35,9 +41,10 @@ name: CI
 
 on:
   # Draft pull requests run no CI (see `changes`, `checks` and `ci`): it starts when the PR is
-  # marked ready for review, and on every push after that.
+  # marked ready for review, and on every push after that. `labeled` is there for approved-for-ci
+  # only (other labels are skipped, see the top of this file).
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   # The merge queue: each queued group runs the full suite before it lands on main.
   merge_group:
   push:
@@ -57,7 +64,10 @@ permissions:
 concurrency:
   # A new PR push replaces the old run. Only one run per group may wait, so a busy main would
   # cancel the waiting nightly (or a Run workflow) before it starts: they get groups of their own.
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  # A `labeled` event for any label but approved-for-ci does no work and must not cancel (or queue
+  # behind) the PR's real run, so it gets a group of its own; approved-for-ci replaces the
+  # unlabelled run with the full one.
+  group: ci-${{ github.event_name }}-${{ github.ref }}${{ github.event.action == 'labeled' && github.event.label.name != 'approved-for-ci' && format('-ignored-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -79,8 +89,9 @@ jobs:
 
   changes:
     name: Select checks
-    # Not on a draft: every other check needs this one, so they skip too.
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    # Not on a draft: every other check needs this one, so they skip too. Not on a label other than
+    # approved-for-ci either (the same skip, for the same reason).
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci')
     # Trusted runs (see the top of this file) use the self-hosted runners.
     runs-on: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && 'self-hosted-light' || 'ubuntu-24.04' }}
     permissions:
@@ -93,6 +104,8 @@ jobs:
       goldens: ${{ steps.paths.outputs.goldens }}
       windows: ${{ steps.paths.outputs.windows }}
       full: ${{ steps.paths.outputs.full }}
+      # Code changed on a pull request that has no approved-for-ci label yet: only Quick compile.
+      quick: ${{ steps.paths.outputs.quick }}
       packages: ${{ steps.paths.outputs.packages }}
       oracle: ${{ steps.paths.outputs.oracle }}
       # The fast self-hosted runners are kept for main and the merge queue (the pre-merge gate);
@@ -110,6 +123,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PUSH_SHA: ${{ github.sha }}
           REPO: ${{ github.repository }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'approved-for-ci') }}
           GH_TOKEN: ${{ github.token }}
         run: |
           native=false
@@ -186,6 +200,15 @@ jobs:
           # The pull request fast lane: Windows and the reference tests run on main (and the nightly),
           # not on every pull request push; a break there is fixed forward on main.
           if [ "$EVENT_NAME" = pull_request ]; then windows=false; oracle=false; fi
+          # Until a maintainer adds approved-for-ci, a pull request gets a quick compile instead of
+          # Clippy, the tests, the doc tests and the goldens.
+          quick=false
+          if [ "$EVENT_NAME" = pull_request ] && [ "$APPROVED" != true ]; then
+            quick=$native
+            native=false
+            oracle=false
+            goldens=false
+          fi
           {
             echo "native=$native"
             echo "kernel=$kernel"
@@ -193,12 +216,13 @@ jobs:
             echo "windows=$windows"
             echo "oracle=$oracle"
             echo "full=$full"
+            echo "quick=$quick"
             echo "packages=$packages"
           } >> "$GITHUB_OUTPUT"
 
   checks:
     name: Format and repository checks
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci')
     runs-on: ${{ (github.event_name == 'merge_group' || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && 'self-hosted-fast' || 'ubuntu-24.04' }}
     timeout-minutes: 15
     steps:
@@ -236,6 +260,26 @@ jobs:
         run: python3 -I scripts/ci/test_affected.py
       - name: Claim and triage bot tests
         run: node --test scripts/claim/*.test.js scripts/triage/*.test.js
+
+  # Fast feedback for a pull request that has not been approved for the full CI yet.
+  quick-compile:
+    name: Quick compile
+    needs: changes
+    if: needs.changes.outputs.quick == 'true'
+    runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-light' || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Size parallel compiles to the job's memory
+        run: scripts/ci/build-jobs.sh
+      - uses: dtolnay/rust-toolchain@stable
+      - if: runner.environment == 'github-hosted'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quick-compile
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Cargo check
+        run: cargo check --workspace --all-targets --locked
 
   clippy:
     name: Native Linux Clippy
@@ -657,8 +701,11 @@ jobs:
 
   # Preserve the existing check name for branch protection, including docs-only PRs.
   ci:
-    needs: [changes, checks, clippy, build-tests, tests, doc-tests, oracle, windows-fxc, windows-startup]
-    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    # On the skipped run another label starts, this job is named differently, so that skipped job
+    # can never stand in for the required `ci` check of the pull request's real run.
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'approved-for-ci' && 'ci (ignored label)' || 'ci' }}
+    needs: [changes, checks, quick-compile, clippy, build-tests, tests, doc-tests, oracle, windows-fxc, windows-startup]
+    if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event.action != 'labeled' || github.event.label.name == 'approved-for-ci')
     runs-on: ${{ needs.changes.outputs.local == 'true' && 'self-hosted-light' || 'ubuntu-24.04' }}
     steps:
       - name: Verify required checks
@@ -666,6 +713,8 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           CHECKS: ${{ needs.checks.result }}
           NATIVE: ${{ needs.changes.outputs.native }}
+          QUICK: ${{ needs.changes.outputs.quick }}
+          QUICK_COMPILE: ${{ needs.quick-compile.result }}
           LOCAL: ${{ needs.changes.outputs.local }}
           WINDOWS: ${{ needs.changes.outputs.windows }}
           ORACLE_RUN: ${{ needs.changes.outputs.oracle }}
@@ -679,6 +728,10 @@ jobs:
         run: |
           test "$CHANGES" = success
           test "$CHECKS" = success
+          # An unapproved pull request: the heavy jobs are skipped on purpose.
+          if [ "$QUICK" = true ]; then
+            test "$QUICK_COMPILE" = success
+          fi
           if [ "$NATIVE" = true ]; then
             test "$CLIPPY" = success
             # The self-hosted test shards build their own tests (no Build tests job there).
