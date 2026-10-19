@@ -74,11 +74,14 @@ pub enum Snap {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         corner: Option<String>,
     },
-    /// A point, z along `z` (default +Z).
+    /// A point, z along `z` (default +Z) and x toward `x` laid square to z (default: one chosen
+    /// from z alone).
     Point {
         point: Vec3,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         z: Option<Vec3>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<Vec3>,
     },
 }
 
@@ -173,7 +176,7 @@ impl Snap {
         match self {
             Snap::Frame { origin, z, x } => origin.is_finite() && z.is_finite() && x.is_none_or(|x| x.is_finite()),
             Snap::FaceCenter { pick, x, .. } | Snap::CircleCenter { pick, x, .. } => pick.is_finite() && x_ok(x),
-            Snap::Point { point, z } => point.is_finite() && z.is_none_or(|z| z.is_finite()),
+            Snap::Point { point, z, x } => point.is_finite() && z.is_none_or(|z| z.is_finite()) && x.is_none_or(|x| x.is_finite()),
             Snap::Edge { pick, .. } => pick.is_finite(),
         }
     }
@@ -673,7 +676,7 @@ pub fn resolve_origin(doc: &Document, st: &ModelState, o: &JointOrigin) -> Resul
     let bad = || DocError::Invalid("joint origin: degenerate frame".into());
     match &o.snap {
         Snap::Frame { origin, z, x } => frame(*origin, *z, *x).ok_or_else(bad),
-        Snap::Point { point, z } => frame(*point, z.unwrap_or(Vec3::Z), None).ok_or_else(bad),
+        Snap::Point { point, z, x } => frame(*point, z.unwrap_or(Vec3::Z), *x).ok_or_else(bad),
         Snap::FaceCenter { pick, face, x } => {
             // A named planar face gives its own centre and normal; another face (or none) the
             // planar face nearest the point.
@@ -1754,7 +1757,7 @@ mod tests {
     /// Revolute joints 1…n (joint 1 at `start`, the others at 0) linked 1 → 2 → … → n with
     /// ratio 2, the links stored from the end of the chain; joint 3 limited to ±50.
     fn chain(n: u64, start: f64) -> Assembly {
-        let origin = JointOrigin { occurrence: 0, snap: Snap::Point { point: Vec3::ZERO, z: None } };
+        let origin = JointOrigin { occurrence: 0, snap: Snap::Point { point: Vec3::ZERO, z: None, x: None } };
         let joints = (1..=n)
             .map(|id| Joint {
                 id,
