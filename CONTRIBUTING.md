@@ -285,6 +285,10 @@ and a fresh CI run:
 2. Branch from `main` and keep the PR to one topic.
 3. Run `cargo xtask ci` before pushing. It runs fmt, the asset, licence and layer checks,
    clippy (`-D warnings`), then the tests with the wasm build check alongside. A PR has to pass it.
+   Heavy CI runs after review: a pull request gets the formatting and repository checks and a
+   quick compile (`cargo check`) when you push. Once a maintainer has reviewed it they add the
+   `approved-for-ci` label, which runs the full CI (build, tests, goldens, Clippy); every push
+   after that runs the full set again.
 4. Reference the issue (`Fixes #12`). In the PR, say what you tested and how. For geometry work, include the measured numbers (and
    the expected ones).
 

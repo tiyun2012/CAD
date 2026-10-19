@@ -96,6 +96,8 @@ pub struct ViewportState {
     pub hover_bodies: Vec<String>,
     /// The model point an orbit turns around (Preferences: orbit around the cursor).
     pub orbit_pivot: Option<Vec3>,
+    /// The orbit drag under way, summed from where it began (see [`crate::navigation::orbit`]).
+    pub orbit_from: Option<crate::navigation::OrbitFrom>,
     /// Continuous orbit: the view turns about the vertical until the next click or key.
     pub spin: bool,
     /// The 3D mouse's motion this frame, for the page showing the camera to apply with what its
@@ -5953,6 +5955,57 @@ mod tests {
                 let after = projection(&h.app, rect).to_screen(pivot).unwrap();
                 assert!(after.distance(at) < 0.5, "perspective={perspective}: {at:?} -> {after:?}");
             }
+        }
+    }
+
+    /// An erratic orbit drag (big jumps, reversals, the pointer over the panels and back) keeps
+    /// the point picked when it began on its pixel the whole way, and coming back to where it
+    /// began brings back the view it began with (up to the rounding of the pointer's f32 steps).
+    #[test]
+    fn an_erratic_cursor_orbit_keeps_its_pivot_and_comes_back() {
+        for perspective in [false, true] {
+            let mut h = crate::scenario::Harness::new();
+            h.app.preferences.orbit_around = crate::prefs::OrbitAround::Cursor;
+            h.app.ui.perspective = perspective;
+            h.app.run("solid.box", json!({"length":80,"width":50,"height":20})).unwrap();
+            h.app.fit_view();
+            h.frames(2);
+            let rect = h.app.viewport.rect.unwrap();
+            let at = rect.center() + vec2(30.0, 20.0);
+            let pivot = crate::prefs::pivot_under(&h.app, &projection(&h.app, rect), at);
+            let start = h.app.cam;
+            let shift = egui::Modifiers { shift: true, ..Default::default() };
+            let send = |h: &mut crate::scenario::Harness, e: egui::Event| {
+                h.app.synthetic.push(e);
+                h.frame();
+            };
+            send(&mut h, egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+            send(&mut h, egui::Event::PointerMoved(at));
+            send(&mut h, egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed: true, modifiers: shift });
+            let mut seed: u32 = 12345;
+            let mut next = move || {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                f32::from((seed >> 16) as u16) / 65535.0
+            };
+            for i in 0..300 {
+                // Mostly small moves, now and then a big jump, some of them over the panels.
+                let p = if i % 17 == 0 { pos2(next() * 1600.0, next() * 1000.0) } else { at + vec2((next() - 0.5) * 900.0, (next() - 0.5) * 200.0) };
+                send(&mut h, egui::Event::PointerMoved(p));
+                assert_eq!(h.app.viewport.orbit_pivot, Some(pivot), "move {i}: the pivot is picked once, when the drag begins");
+                let s = projection(&h.app, rect).to_screen(pivot).unwrap();
+                assert!(s.distance(at) < 1.0, "perspective={perspective}, move {i} to {p:?}: the pivot moved to {s:?}");
+            }
+            send(&mut h, egui::Event::PointerMoved(at));
+            let s = projection(&h.app, rect).to_screen(pivot).unwrap();
+            assert!(s.distance(at) < 1.0, "{s:?}");
+            let back = h.app.cam;
+            assert!(
+                (back.yaw - start.yaw).rem_euclid(std::f64::consts::TAU).min((start.yaw - back.yaw).rem_euclid(std::f64::consts::TAU)) < 1e-6,
+                "{start:?} -> {back:?}"
+            );
+            assert!((back.pitch - start.pitch).abs() < 1e-6, "{start:?} -> {back:?}");
+            assert!((back.target - start.target).len() < 1e-4, "back where it began: {start:?} -> {back:?}");
+            send(&mut h, egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed: false, modifiers: shift });
         }
     }
 

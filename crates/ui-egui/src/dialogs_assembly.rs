@@ -281,8 +281,10 @@ pub fn edit_joint(app: &SolveApp, id: u64) -> Option<Dialog> {
     f.editing = Some(id);
     f.kind = TYPES.iter().position(|t| JointKind::parse(t) == Some(j.kind)).unwrap_or(0);
     f.flip = j.flip;
-    f.angle = num(j.angle.to_degrees(), "deg");
-    f.offset[2] = num(j.offset, "mm");
+    // An offset or angle typed as an expression shows (and is sent back) as that expression, so
+    // the joint keeps following its parameters.
+    f.angle = j.exprs.angle.clone().unwrap_or_else(|| num(j.angle.to_degrees(), "deg"));
+    f.offset[2] = j.exprs.offset.clone().unwrap_or_else(|| num(j.offset, "mm"));
     f.fit_limits();
     for (i, l) in f.limits.iter_mut().enumerate() {
         if let Some(Some((lo, hi))) = j.limits.get(i) {
