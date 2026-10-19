@@ -305,6 +305,10 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
             ui.painter().text(pos2(left + 36.0, r.center().y), Align2::LEFT_CENTER, "SolidCraft", FontId::proportional(14.0), t.app_bar_text);
         }
         let mut x = left + if compact_actions { 60.0 } else { 128.0 };
+        let browser_toggle = Rect::from_center_size(pos2(x, r.center().y), vec2(26.0, 26.0));
+        if crate::library::app_bar_toggle(app, ui, browser_toggle) {
+            x += 34.0;
+        }
         // While a file loads the design waits: no menus or commands from the bar.
         let idle = !app.file_load.busy();
         // The File menu: a text button (New, Open, Save, Save As, Export…). Its handle keeps the

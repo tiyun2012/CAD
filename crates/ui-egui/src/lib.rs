@@ -69,6 +69,7 @@ pub mod install;
 pub mod issue_report;
 pub mod joint_drag;
 pub mod keymap;
+pub mod library;
 mod material_card_review;
 #[cfg(test)]
 mod measurement_ui_tests;
@@ -275,6 +276,8 @@ pub struct Services {
     pub pick_file: Option<Box<dyn Fn(&str, &[&str]) -> FilePickerFuture>>,
     /// Open a dialog asking for a program (a slicer); `None` when the host has no such dialog.
     pub pick_program: Option<Box<dyn Fn() -> FilePickerFuture>>,
+    /// Select the local document library root; unavailable in browser hosts.
+    pub pick_folder: Option<Box<dyn Fn() -> FilePickerFuture>>,
     pub show_in_folder: Option<Box<dyn Fn(&str)>>,
     /// Where the host reads the anti-aliasing preference at start (a small JSON file).
     pub graphics_path: Option<String>,
@@ -407,6 +410,7 @@ pub struct SolveApp {
     pub flat_view: dialogs_sheet::FlatView,
     /// The start page.
     pub home: home::HomeState,
+    pub library: library::LibraryState,
     pub file_load: file_load::FileLoad,
     /// The other open designs (tabs).
     pub docs: documents::Documents,
@@ -497,6 +501,7 @@ impl SolveApp {
             pending_fit: None,
             flat_view: Default::default(),
             home: home::HomeState::default(),
+            library: library::LibraryState::default(),
             file_load: file_load::FileLoad::default(),
             docs: documents::Documents::default(),
             applied_fonts_language: "en".into(),
@@ -549,6 +554,7 @@ impl SolveApp {
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
             "recent_opened_at": self.home.opened_at,
+            "document_library": self.library.prefs(),
             "shortcut_box": self.sbox.prefs(),
             "shortcuts": self.keymap.prefs(),
             "toolbar": self.toolbar_custom.prefs(),
@@ -593,6 +599,7 @@ impl SolveApp {
                 .map(|a| a.iter().take(10_000).filter_map(|x| x.as_str().map(str::to_string)).collect())
                 .unwrap_or_default()
         };
+        self.library.load(v.get("document_library"));
         self.tree.collapsed = keys("browser_collapsed");
         self.tree.expanded = keys("browser_expanded");
         self.home.recent = v
@@ -638,7 +645,21 @@ impl SolveApp {
             return Err("a file operation is in progress".into());
         }
         let t0 = now_ms();
-        let r = self.session.execute(id, &params).map_err(|e| e.to_string());
+        // File commands may also arrive through shortcuts, scripts, or the control
+        // channel. Protect every open tab here, including after asynchronous pickers.
+        let removes_open_file = matches!(id, "file.move" | "file.trash")
+            && params.get("path").and_then(Value::as_str).is_some_and(|path| documents::uses_file(self, path));
+        let r = if removes_open_file {
+            Err("Close designs using this file before renaming, moving, or trashing it".into())
+        } else {
+            self.session.execute(id, &params).map_err(|e| e.to_string())
+        };
+        // A transfer can persist a destination before reporting a later failure.
+        // Rescan once per attempted file mutation, including partial errors; rejected
+        // open-file removals never reached the filesystem and need no refresh.
+        if !removes_open_file && matches!(id, "file.copy" | "file.move" | "file.trash") {
+            self.library.refresh();
+        }
         self.big_operation |= now_ms() - t0 >= recovery_ui::BIG_OPERATION_MS;
         if let Ok(v) = &r {
             if matches!(id, "view.ambient_occlusion" | "view.graphics_preset") {
@@ -695,6 +716,9 @@ impl SolveApp {
                     self.preview.reset();
                     self.cam = Camera::default();
                     self.fit_view();
+                }
+                if matches!(id, "file.save" | "file.save_as") {
+                    self.library.refresh();
                 }
                 if matches!(id, "doc.open" | "file.save" | "file.save_as")
                     && let Some(p) = self.session.path.clone()
@@ -1387,6 +1411,7 @@ impl SolveApp {
         documents::prompt(self, ui.ctx());
         update::show(self, ui.ctx());
         install::show(self, ui.ctx());
+        library::panel(self, ui);
         if self.home.open {
             home::show(self, ui);
             if self.home.open {

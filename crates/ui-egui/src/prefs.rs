@@ -258,6 +258,8 @@ pub const DEFAULT_BROWSER_WIDTH: f32 = 250.0;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Prefs {
+    /// Show Home on a normal launch without a file and after closing the last design; otherwise show the empty design.
+    pub show_home_on_startup: bool,
     /// Units of new designs.
     pub default_units: String,
     /// Mouse mapping: `fusion`, `solidworks` or `inventor`.
@@ -421,9 +423,17 @@ impl MiddleDoubleClick {
     }
 }
 
+impl Prefs {
+    /// Explicit files, samples and control clients keep their existing launch behavior.
+    pub fn home_on_launch(&self, has_file: bool, sample: bool, controlled: bool) -> bool {
+        self.show_home_on_startup && !has_file && !sample && !controlled
+    }
+}
+
 impl Default for Prefs {
     fn default() -> Self {
         Prefs {
+            show_home_on_startup: true,
             default_units: "mm".into(),
             nav: "fusion".into(),
             navigator_style: NavigatorStyle::default(),
@@ -703,6 +713,7 @@ fn defaults(app: &mut SolveApp, page: usize) {
     let p = &mut app.preferences;
     match page {
         0 => {
+            p.show_home_on_startup = d.show_home_on_startup;
             p.theme = d.theme;
             p.language = d.language;
             p.ui_scale = d.ui_scale;
@@ -1174,6 +1185,17 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     egui::Grid::new(("sc_prefs_grid", app.prefs_window.section)).num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| match app.prefs_window.section {
         0 => {
+            ui.label(app.tr("ui.on_startup"));
+            let selected = app.tr(if app.preferences.show_home_on_startup { "ui.home" } else { "ui.new_design" }).to_string();
+            let choice = egui::ComboBox::from_id_salt("pref_startup").selected_text(selected).show_ui(ui, |ui| {
+                for (home, key) in [(true, "ui.home"), (false, "ui.new_design")] {
+                    let response = ui.selectable_value(&mut app.preferences.show_home_on_startup, home, crate::i18n::tr(key));
+                    crate::scenario::publish_rect(if home { "prefs:startup_home" } else { "prefs:startup_design" }, response.rect);
+                }
+            });
+            crate::scenario::publish_rect("prefs:startup", choice.response.rect);
+            ui.end_row();
+            note(ui, app.tr("ui.on_startup_note"));
             ui.label(app.tr("ui.language"));
             egui::ComboBox::from_id_salt("pref_language").selected_text(crate::i18n::Locale::for_language(&app.preferences.language).name()).show_ui(
                 ui,
@@ -1781,6 +1803,54 @@ pub fn set(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::Valu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_choice_general_picker_obeys_cancel_and_ok() {
+        use serde_json::json;
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.prefs", json!({"open": "General"}));
+        for button in ["cancel", "ok"] {
+            let picker = crate::scenario::rect_of("prefs:startup").unwrap().center();
+            h.call("ui.click", json!({"x": picker.x, "y": picker.y}));
+            let design = crate::scenario::rect_of("prefs:startup_design").unwrap().center();
+            h.call("ui.click", json!({"x": design.x, "y": design.y}));
+            assert!(!h.app.preferences.show_home_on_startup);
+            h.call("ui.prefs", json!({"button": button}));
+            assert_eq!(h.app.preferences.show_home_on_startup, button == "cancel");
+            h.call("ui.prefs", json!({"open": "General"}));
+        }
+    }
+
+    #[test]
+    fn startup_choice_defaults_persists_and_resets() {
+        use serde_json::json;
+        let legacy: super::Prefs = serde_json::from_value(json!({"default_units": "in"})).unwrap();
+        assert!(legacy.show_home_on_startup);
+        let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+        for home in [false, true, false] {
+            super::set(&mut app, &json!({"show_home_on_startup": home, "default_units": "in"})).unwrap();
+            let mut restored = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+            restored.load_prefs(&app.prefs());
+            assert_eq!(restored.preferences.show_home_on_startup, home);
+            assert_eq!(restored.preferences.default_units, "in");
+        }
+        super::defaults(&mut app, 0);
+        assert!(app.preferences.show_home_on_startup);
+    }
+
+    #[test]
+    fn startup_choice_only_affects_an_ordinary_empty_launch() {
+        for home in [true, false] {
+            let prefs = super::Prefs { show_home_on_startup: home, ..Default::default() };
+            for has_file in [true, false] {
+                for sample in [true, false] {
+                    for controlled in [true, false] {
+                        assert_eq!(prefs.home_on_launch(has_file, sample, controlled), home && !has_file && !sample && !controlled);
+                    }
+                }
+            }
+        }
+    }
+
     /// The interface font (#1290): a font that can be read, or empty for the built-in one; saved
     /// with the others and reset by Restore Defaults.
     #[test]
