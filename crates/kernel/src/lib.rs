@@ -28,6 +28,11 @@ mod boundary;
 mod boundary_network;
 mod bridge;
 mod build;
+#[cfg(test)]
+mod chamfer_sides_curved_tests;
+mod chamfer_through;
+#[cfg(test)]
+mod chamfer_through_tests;
 mod clearance;
 mod coaxial_overlap;
 mod continuity;

@@ -106,7 +106,7 @@ fn rebuild_face_dropping(f: &mt::Face, subst: &HashMap<mt::EdgeID, mt::Edge>, dr
 }
 
 /// A loop blend's refusal that is about its size: too large, or using up only some of the walls.
-fn size_refusal(e: &KernelError) -> bool {
+pub(crate) fn size_refusal(e: &KernelError) -> bool {
     match e {
         KernelError::TooLarge(_) => true,
         KernelError::Failed(m) => m.contains("uses up"),
@@ -1719,7 +1719,7 @@ fn smooth_loop(w: &mt::Wire) -> bool {
 }
 
 /// The B-rep edges nearest the points (each once).
-fn edge_ids(cur: &Body, solid: &Solid, pts: &[Vec3]) -> Result<Vec<mt::EdgeID>> {
+pub(crate) fn edge_ids(cur: &Body, solid: &Solid, pts: &[Vec3]) -> Result<Vec<mt::EdgeID>> {
     let all = Body::unique_edges(solid);
     let mut ids = Vec::new();
     for p in pts {
@@ -1748,7 +1748,7 @@ fn loop_groups(cur: &Body, pts: &[Vec3]) -> Result<Option<Vec<Vec<Vec3>>>> {
 }
 
 /// Edges in whole loops of planar faces (points per loop), and the other edges' points.
-fn loop_split(cur: &Body, pts: &[Vec3]) -> Result<Option<(Vec<Vec<Vec3>>, Vec<Vec3>)>> {
+pub(crate) fn loop_split(cur: &Body, pts: &[Vec3]) -> Result<Option<(Vec<Vec<Vec3>>, Vec<Vec3>)>> {
     let solid = cur.deep_copy();
     let size = cur.size();
     let tol = (size * 2e-3).max(1e-3);
@@ -2084,9 +2084,29 @@ pub fn chamfer(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
     // A chamfer that would run past its faces into other geometry or another chamfer, or whose
     // result changes more than the chamfers can (#1080).
     let size = crate::blend_fit::Size::Chamfer(distance);
-    match chamfer_built(body, edges, distance) {
+    let exact = match chamfer_built(body, edges, distance) {
         Ok(b) => crate::blend_fit::accept(body, b, edges, size),
         Err(e) => Err(crate::blend_fit::explain(body, edges, size, e)),
+    };
+    or_cut_through(body, edges, distance, None, exact)
+}
+
+/// A chamfer refused as too large for the faces beside its edges: convex edges whose setbacks
+/// run past the faces they join (taller than a wall, wider than a face) are cut through the
+/// faces they reach instead ([`crate::chamfer_through`]). Other refusals stand.
+fn or_cut_through(body: &Body, edges: &[Vec3], d1: f64, sides: Option<(ChamferSide, bool)>, exact: Result<Body>) -> Result<Body> {
+    let refusal = match exact {
+        Err(e) if size_refusal(&e) => e,
+        other => return other,
+    };
+    match crate::chamfer_through::cut(body, edges, d1, sides) {
+        Ok(Some(b)) => Ok(b),
+        Ok(None) => Err(refusal),
+        Err(why) => Err(match refusal {
+            KernelError::TooLarge(m) => KernelError::TooLarge(format!("{m} (cutting it through the faces it reaches: {why})")),
+            KernelError::Failed(m) => KernelError::Failed(format!("{m} (cutting it through the faces it reaches: {why})")),
+            other => other,
+        }),
     }
 }
 
@@ -2237,24 +2257,24 @@ fn cut_one(cur: &Body, t: &Cutter) -> Result<Option<Body>> {
 /// A cut of `cur` by cutters (their union), from its history `h` over `[cur, cutter 0, …]`, as
 /// over `[cur]`: each cutter's chamfer face is made in place of its edge, and nothing else of a
 /// cutter may be left (`None` where something is).
-fn cut_history(h: Option<History>, cur: &Body, tools: &[Cutter]) -> Option<History> {
+pub(crate) fn cut_history(h: Option<History>, cur: &Body, tools: &[Cutter]) -> Option<History> {
     let parts: Vec<History> = std::iter::once(History::identity(cur)).chain(tools.iter().map(Cutter::history)).collect();
     crate::boolean_record::composed(h?.over(&parts.iter().collect::<Vec<_>>()))
 }
 
 /// Geometry of a straight convex edge between two planar faces.
-struct EdgeFrame {
-    p0: Vec3,
-    p1: Vec3,
-    d: Vec3,
-    n1: Vec3,
-    n2: Vec3,
-    t1: Vec3,
-    t2: Vec3,
+pub(crate) struct EdgeFrame {
+    pub(crate) p0: Vec3,
+    pub(crate) p1: Vec3,
+    pub(crate) d: Vec3,
+    pub(crate) n1: Vec3,
+    pub(crate) n2: Vec3,
+    pub(crate) t1: Vec3,
+    pub(crate) t2: Vec3,
 }
 
 /// The edge nearest `p` (its index in `cur`'s edge order) and its frame.
-fn edge_frame(cur: &Body, p: Vec3) -> Result<(usize, EdgeFrame)> {
+pub(crate) fn edge_frame(cur: &Body, p: Vec3) -> Result<(usize, EdgeFrame)> {
     let size = cur.size();
     let tol = (size * 2e-3).max(1e-3);
     let Some((idx, dist)) = cur.nearest_edge(p, tol)? else { return Err(KernelError::Invalid("the body has no edges".into())) };
@@ -2285,6 +2305,31 @@ fn edge_frame(cur: &Body, p: Vec3) -> Result<(usize, EdgeFrame)> {
     Ok((idx, EdgeFrame { p0, p1, d, n1, n2, t1, t2 }))
 }
 
+/// The setbacks along each face of a straight edge for a chamfer of `s`: equal, or `s` on the
+/// first face and the second side by its rule. The first face (the one facing up most, then +y,
+/// +x, unless flipped) becomes face 1 of `f`.
+pub(crate) fn side_setbacks(f: &mut EdgeFrame, s: f64, sides: Option<(ChamferSide, bool)>) -> Result<(f64, f64)> {
+    let Some((side, flip)) = sides else { return Ok((s, s)) };
+    let up = Vec3::new(1e-6, 1e-3, 1.0);
+    if (f.n2.dot(up) > f.n1.dot(up)) != flip {
+        std::mem::swap(&mut f.n1, &mut f.n2);
+        std::mem::swap(&mut f.t1, &mut f.t2);
+    }
+    let s2 = match side {
+        ChamferSide::Distance(d) => d,
+        ChamferSide::Angle(a) => {
+            // The triangle edge–A–B: angle φ at the edge, `a` at A (on face 1).
+            let phi = f.t1.dot(f.t2).clamp(-1.0, 1.0).acos();
+            let den = (phi + a).sin();
+            if den <= 1e-9 {
+                return Err(KernelError::Invalid("that chamfer angle runs past the other face".into()));
+            }
+            s * a.sin() / den
+        }
+    };
+    Ok((s, s2))
+}
+
 /// The prism that cuts a chamfer of size `s` on the edge nearest `p`. `k` varies the parts that
 /// stay outside the body so that neighbouring cutters don't share edges.
 /// The second side of an unequal chamfer: a distance along the other face, or the angle the
@@ -2295,9 +2340,11 @@ pub enum ChamferSide {
     Angle(f64),
 }
 
-/// A chamfer with different setbacks on the two faces of each (straight) edge: `d1` along the
-/// first face (the one facing up most, the other with `flip`), the second side by distance or
-/// angle.
+/// A chamfer with different setbacks on the two faces of each edge: `d1` along the first face
+/// (the one facing up most, the other with `flip`), the second side by distance or angle.
+/// Straight edges between planar faces are cut by prisms; curved edges where a planar face meets
+/// a wall (a circular rim between a plane and a cylinder or cone, convex or concave, and loops of
+/// lines and arcs) are chamfered along that face's loop.
 pub fn chamfer_sides(body: &Body, edges: &[Vec3], d1: f64, side: ChamferSide, flip: bool) -> Result<Body> {
     body.require_brep("chamfer")?;
     let ok = |x: f64| x.is_finite() && x > 1e-6 && x < 1e6;
@@ -2314,24 +2361,95 @@ pub fn chamfer_sides(body: &Body, edges: &[Vec3], d1: f64, side: ChamferSide, fl
     }
     let size = crate::blend_fit::Size::Sides(d1, side, flip);
     let counts = record::counts(&[body]);
-    let mut cur = crate::boolean_record::operand(body, 0, &counts);
-    for (k, p) in edges.iter().enumerate() {
-        let t = chamfer_tool_sides(&cur, *p, d1, Some((side, flip)), k)?;
-        let step = cut_one(&cur, &t)?.ok_or_else(|| KernelError::Failed("the chamfer removed everything".into()))?;
-        cur = record::after(step, &cur, &counts);
+    let cut = || -> Result<Body> {
+        let mut cur = crate::boolean_record::operand(body, 0, &counts);
+        for (k, p) in edges.iter().enumerate() {
+            let t = chamfer_tool_sides(&cur, *p, d1, Some((side, flip)), k)?;
+            let step = cut_one(&cur, &t)?.ok_or_else(|| KernelError::Failed("the chamfer removed everything".into()))?;
+            cur = record::after(step, &cur, &counts);
+        }
+        Ok(cur)
+    };
+    // A curved edge picked: the prisms cannot cut it, and cutting the others first moves what
+    // its pick lands on.
+    let picks_curved = {
+        let solid = body.deep_copy();
+        let ids = edge_ids(body, &solid, edges)?;
+        guard("chamfer", || Ok(Body::unique_edges(&solid).iter().any(|x| ids.contains(&x.id()) && curved_case(&solid, x, false))))?
+    };
+    let exact = match picks_curved {
+        true => chamfer_sides_curved(body, edges, d1, side, flip, None),
+        false => match cut() {
+            Ok(cur) => Ok(cur),
+            Err(e) => chamfer_sides_curved(body, edges, d1, side, flip, Some(e)),
+        },
     }
-    crate::blend_fit::accept(body, cur, edges, size)
+    .and_then(|cur| crate::blend_fit::accept(body, cur, edges, size));
+    or_cut_through(body, edges, d1, Some((side, flip)), exact)
+}
+
+/// [`chamfer_sides`] of a selection with curved edges, or one the prisms could not cut (`e`:
+/// why) with edges running on smoothly into curved ones: whole loops of planar faces and runs of
+/// one are chamfered along the loop ([`crate::loopblend::loop_chamfer_sides`]), other edges still
+/// by a prism. A selection of straight edges only keeps the prisms' refusal.
+fn chamfer_sides_curved(body: &Body, edges: &[Vec3], d1: f64, side: ChamferSide, flip: bool, e: Option<KernelError>) -> Result<Body> {
+    let counts = record::counts(&[body]);
+    let mut cur = crate::boolean_record::healed(body)?;
+    let curved = {
+        let solid = cur.deep_copy();
+        let ids = edge_ids(&cur, &solid, edges)?;
+        guard("chamfer", || {
+            let all = Body::unique_edges(&solid);
+            let curved = |x: &mt::Edge| curved_case(&solid, x, false);
+            Ok(all
+                .iter()
+                .filter(|x| ids.contains(&x.id()))
+                .any(|x| curved(x) || smooth_chain(&solid, x).is_some_and(|chain| all.iter().any(|y| chain.contains(&y.id()) && curved(y)))))
+        })?
+    };
+    if !curved {
+        return Err(e.unwrap_or_else(|| unsupported("these edges")));
+    }
+    // The loop chamfer of the edges nearest `pts`, all on one planar face's loop.
+    let along_loop = |cur: &Body, pts: &[Vec3]| -> Result<Body> {
+        let size = cur.size();
+        let solid = cur.deep_copy();
+        let ids = edge_ids(cur, &solid, pts)?;
+        match crate::loopblend::loop_chamfer_sides(&solid, &ids, size, d1, side, flip) {
+            Some(res) => {
+                let (made, rec) = guard("chamfer", || res)?;
+                Ok(record::after(record::rebuilt(made, &[&solid], &rec)?, cur, &counts))
+            }
+            None => Err(unsupported(
+                "a two-distance or distance-angle chamfer of a curved edge that is not on the boundary of a planar face (an equal-distance chamfer may work there)",
+            )),
+        }
+    };
+    let (groups, rest) = loop_split(&cur, edges)?.unwrap_or_else(|| (Vec::new(), edges.to_vec()));
+    for g in &groups {
+        cur = along_loop(&cur, g)?;
+    }
+    for (k, p) in rest.iter().enumerate() {
+        cur = match chamfer_tool_sides(&cur, *p, d1, Some((side, flip)), k) {
+            Ok(t) => {
+                let step = cut_one(&cur, &t)?.ok_or_else(|| KernelError::Failed("the chamfer removed everything".into()))?;
+                record::after(step, &cur, &counts)
+            }
+            Err(_) => along_loop(&cur, std::slice::from_ref(p))?,
+        };
+    }
+    Ok(cur)
 }
 
 /// The prism that cuts a chamfer: the body, which of its faces is the chamfer plane, and the
 /// edge (of the body it chamfers, in its edge order) that face is made in place of.
 pub(crate) struct Cutter {
-    body: Body,
-    face: Option<usize>,
-    edge: usize,
+    pub(crate) body: Body,
+    pub(crate) face: Option<usize>,
+    pub(crate) edge: usize,
     /// The mitre extension at mid-edge lies in the body. On a convex edge it stays outside.
     /// On a hole corner it runs into the walls, and the cutter bites them (#814).
-    extension_inside: bool,
+    pub(crate) extension_inside: bool,
 }
 
 impl Cutter {
@@ -2351,31 +2469,7 @@ pub(crate) fn chamfer_tool(cur: &Body, p: Vec3, s: f64, k: usize) -> Result<Cutt
 
 fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, bool)>, k: usize) -> Result<Cutter> {
     let (edge, mut f) = edge_frame(cur, p)?;
-    // Setbacks along each face: equal, or by the second side's rule.
-    let (s1, s2) = match sides {
-        None => (s, s),
-        Some((side, flip)) => {
-            // Side 1: the face facing up most (then +y, +x), unless flipped.
-            let up = Vec3::new(1e-6, 1e-3, 1.0);
-            if (f.n2.dot(up) > f.n1.dot(up)) != flip {
-                std::mem::swap(&mut f.n1, &mut f.n2);
-                std::mem::swap(&mut f.t1, &mut f.t2);
-            }
-            let s2 = match side {
-                ChamferSide::Distance(d) => d,
-                ChamferSide::Angle(a) => {
-                    // The triangle edge–A–B: angle φ at the edge, `a` at A (on face 1).
-                    let phi = f.t1.dot(f.t2).clamp(-1.0, 1.0).acos();
-                    let den = (phi + a).sin();
-                    if den <= 1e-9 {
-                        return Err(KernelError::Invalid("that chamfer angle runs past the other face".into()));
-                    }
-                    s * a.sin() / den
-                }
-            };
-            (s, s2)
-        }
-    };
+    let (s1, s2) = side_setbacks(&mut f, s, sides)?;
     let s = s1.max(s2);
     let size = cur.size();
     let len = f.p0.dist(f.p1);
