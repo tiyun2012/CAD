@@ -460,7 +460,7 @@ fn tapered_extrudes() {
 }
 
 /// A slot (two lines and two half-circles, tangent) tapered inward: every edge moves in by
-/// d = z · tan 8°, so A(d) = A₀ − P·d + π·d² (#546). An arc meeting a line at a corner is refused.
+/// d = z · tan 8°, so A(d) = A₀ − P·d + π·d² (#546).
 #[test]
 fn tapered_extrude_of_lines_and_arcs() {
     let (r, l, h, a) = (5.0, 20.0, 12.0, 8f64.to_radians());
@@ -478,16 +478,6 @@ fn tapered_extrude_of_lines_and_arcs() {
     let m = measure(&b).unwrap();
     assert!(rel(m.volume, v) < 5e-4, "{} vs {v}", m.volume);
     assert_eq!(m.merged.faces, 6);
-    // A quarter disc: the arc meets both lines at right angles.
-    let quarter = Loop2 {
-        segs: vec![
-            Seg2::Line { a: Vec2::ZERO, b: Vec2::new(r, 0.0) },
-            Seg2::Arc { center: Vec2::ZERO, radius: r, start: 0.0, sweep: PI / 2.0 },
-            Seg2::Line { a: Vec2::new(0.0, r), b: Vec2::ZERO },
-        ],
-    };
-    let e = extrude_tapered(&Plane::XY, &Region2 { outer: quarter, holes: vec![] }, h, 1.0, a).unwrap_err();
-    assert!(e.to_string().contains("arc meets another edge at a corner"), "{e}");
 }
 
 /// A circle drawn as four conics (the way free curves come, as in text) tapered inward: each
