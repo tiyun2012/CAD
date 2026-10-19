@@ -457,10 +457,11 @@ completed drawings publish atomically. The browser still exports synchronously.
   and author occurrence paths retain the chosen placements; missing/split faces refuse rather
   than retarget. General free-form profiles, seams, stepped cylinders and other curved surfaces
   remain unsupported. STEP round-trip and independent radial/volume checks cover this subset.
-- Shell and offset faces work on bodies of planes, cylinders, cones and spheres (convex or not:
+- Shell and offset faces work on bodies of planes, cylinders, cones, spheres and tori (convex or not:
   filleted boxes, bosses, domes, countersinks; corners where four or more planes meet, such as a
   floor falling to a drain, as long as the corner's edges are all convex or all concave); draft on convex planar bodies and on walls (planes, cylinders → cones) between caps; lofts through three or more sections are smooth (B-spline sides through every section), two
-  sections ruled.
+  sections ruled. Circular-meridian barrels retain curved inner walls through either axial
+  opening (#2421).
 
 - Sketch corner tools: fillet and all three chamfer modes pick a connected corner even when
   its endpoint overlaps the fixed origin or a loose point. Ordinary drawing still snaps to
