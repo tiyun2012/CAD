@@ -22,6 +22,7 @@ pub struct DocSlot {
     pre_sketch_cam: Option<Camera>,
     pre_sketch_marker: Option<Option<usize>>,
     view: DocView,
+    occurrence_move: Option<crate::browser::OccMove>,
 }
 
 /// The per-design part of the UI state (what is hidden, shown or locked).
@@ -36,7 +37,7 @@ struct DocView {
 
 impl DocSlot {
     fn new(session: Session) -> DocSlot {
-        DocSlot { session, cam: Camera::default(), pre_sketch_cam: None, pre_sketch_marker: None, view: DocView::default() }
+        DocSlot { session, cam: Camera::default(), pre_sketch_cam: None, pre_sketch_marker: None, view: DocView::default(), occurrence_move: None }
     }
 }
 
@@ -110,6 +111,7 @@ fn swap_in(app: &mut SolveApp, slot: DocSlot) -> DocSlot {
         pre_sketch_cam: std::mem::replace(&mut app.pre_sketch_cam, slot.pre_sketch_cam),
         pre_sketch_marker: std::mem::replace(&mut app.pre_sketch_marker, slot.pre_sketch_marker),
         view: take_view(app),
+        occurrence_move: std::mem::replace(&mut app.tree.occurrence_move, slot.occurrence_move),
     };
     put_view(app, slot.view);
     // Preferences the session holds go with the user, not the tab (#680).

@@ -162,3 +162,116 @@ fn ctrl_x_cuts_the_sketch_selection_and_ctrl_v_brings_it_back() {
     let labels: Vec<&str> = menu["result"]["items"].as_array().unwrap().iter().filter_map(|i| i["label"].as_str()).collect();
     assert!(labels.contains(&"Cut"), "{labels:?}");
 }
+
+struct ContributionPart(std::path::PathBuf);
+impl ContributionPart {
+    fn new() -> Self {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        Self(std::env::temp_dir().join(format!("solidcraft-linked-clipboard-{}-{stamp}.solidcraft", std::process::id())))
+    }
+}
+impl Drop for ContributionPart {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+fn contribution_saved_part(file: &ContributionPart) -> crate::SolveApp {
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    app.run("solid.box", json!({"length":20,"width":10,"height":5,"body_name":"Plate"})).unwrap();
+    app.run("file.save", json!({"path":file.0.to_string_lossy()})).unwrap();
+    app.tree.picked_components = vec![0];
+    app
+}
+
+#[test]
+fn contribution_linked_design_clipboard_crosses_tabs_reuses_links_and_undoes_once() {
+    let file = ContributionPart::new();
+    let mut app = contribution_saved_part(&file);
+    assert!(super::can_copy(&app));
+    assert!(super::copy(&mut app));
+    crate::documents::open_tab(&mut app, solidcraft_engine::Session::default()).unwrap();
+    assert!(super::can_paste(&app));
+    for n in 1..=2 {
+        assert!(super::paste(&mut app, None), "{:?}", app.status);
+        assert_eq!(app.session.doc.components.len(), 1);
+        assert_eq!(app.session.doc.links.len(), 1);
+        assert_eq!(app.session.doc.features.len(), 1);
+        assert_eq!(app.session.doc.occurrences.len(), n);
+        assert_eq!(app.session.undo.len(), n);
+        assert!(app.session.doc.occurrences.iter().all(|o| !o.grounded));
+        assert!(app.tree.occurrence_move.is_some());
+    }
+    app.tree.occurrence_move = None;
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.doc.occurrences.len(), 1);
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(app.session.doc.links.is_empty());
+    assert!(app.session.doc.components.is_empty());
+    app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(app.session.doc.links.len(), 1);
+    crate::documents::switch(&mut app, 0);
+    assert_eq!(app.session.doc.features.len(), 1, "the source is untouched");
+}
+
+#[test]
+fn contribution_occurrence_move_panel_belongs_to_its_document() {
+    let file = ContributionPart::new();
+    let mut app = contribution_saved_part(&file);
+    assert!(super::copy(&mut app));
+    crate::documents::open_tab(&mut app, solidcraft_engine::Session::default()).unwrap();
+    assert!(super::paste(&mut app, None));
+    let id = app.tree.occurrence_move.as_ref().unwrap().occurrence;
+    app.run("occurrence.move", json!({"occurrence":id,"translate":[10,0,0],"capture":false})).unwrap();
+    let pending = app.session.pending_moves.clone();
+    crate::documents::switch(&mut app, 0);
+    assert!(app.tree.occurrence_move.is_none());
+    assert!(app.session.doc.occurrences.is_empty());
+    crate::documents::switch(&mut app, 1);
+    assert_eq!(app.tree.occurrence_move.as_ref().unwrap().occurrence, id);
+    assert_eq!(app.session.pending_moves, pending);
+}
+
+#[test]
+fn contribution_linked_clipboard_refuses_unsaved_dirty_self_and_missing_sources() {
+    let file = ContributionPart::new();
+    let mut app = crate::SolveApp::new(solidcraft_engine::Session::default(), crate::Services::default());
+    assert!(!super::copy_design(&mut app));
+    app = contribution_saved_part(&file);
+    assert!(super::copy_design(&mut app));
+    let doc = app.session.doc.clone();
+    assert!(!super::paste(&mut app, None));
+    assert_eq!(app.session.doc, doc);
+    app.run("solid.box", json!({"length":2,"width":2,"height":2,"corner":[30,0,0]})).unwrap();
+    assert!(!super::copy_design(&mut app));
+    crate::documents::open_tab(&mut app, solidcraft_engine::Session::default()).unwrap();
+    std::fs::remove_file(&file.0).unwrap();
+    assert!(!super::paste(&mut app, None));
+    assert!(app.session.doc.features.is_empty());
+    assert!(app.session.undo.is_empty());
+}
+
+#[test]
+fn contribution_feature_copy_replaces_the_linked_design_clipboard() {
+    let file = ContributionPart::new();
+    let mut app = contribution_saved_part(&file);
+    assert!(super::copy(&mut app));
+    app.tree.picked_components.clear();
+    app.session.selection = vec![Sel::Feature { id: app.session.doc.features[0].id }];
+    assert!(super::copy(&mut app));
+    assert!(app.linked_design_clipboard.is_none());
+    assert!(!app.session.clipboard.is_empty());
+}
+
+#[test]
+fn contribution_native_copy_paste_events_insert_the_saved_design_in_another_tab() {
+    let file = ContributionPart::new();
+    let mut h = Harness::new();
+    h.app = contribution_saved_part(&file);
+    h.frames(3);
+    clipboard_event(&mut h, egui::Event::Copy, None);
+    assert!(h.app.linked_design_clipboard.is_some());
+    crate::documents::open_tab(&mut h.app, solidcraft_engine::Session::default()).unwrap();
+    clipboard_event(&mut h, egui::Event::Paste("SolidCraft linked design".into()), None);
+    assert_eq!(h.app.session.doc.links.len(), 1, "{:?}", h.app.status);
+    assert_eq!(h.app.session.undo.len(), 1);
+}

@@ -42,16 +42,39 @@ fn sketch_selection(app: &SolveApp) -> Vec<String> {
 
 /// Is there something Copy would copy?
 pub fn can_copy(app: &SolveApp) -> bool {
-    if app.session.active_sketch.is_some() { !sketch_selection(app).is_empty() } else { !crate::timeline::selected_feature_ids(app).is_empty() }
+    if app.session.active_sketch.is_some() {
+        !sketch_selection(app).is_empty()
+    } else {
+        app.tree.picked_components == [0] || !crate::timeline::selected_feature_ids(app).is_empty()
+    }
 }
 
 /// Is there something Paste would paste here?
 pub fn can_paste(app: &SolveApp) -> bool {
-    if app.session.active_sketch.is_some() { app.session.sketch_clipboard.is_some() } else { !app.session.clipboard.is_empty() }
+    if app.session.active_sketch.is_some() {
+        app.session.sketch_clipboard.is_some()
+    } else {
+        app.linked_design_clipboard.is_some() || !app.session.clipboard.is_empty()
+    }
+}
+
+/// Copy the saved root design. The path stays in this app, outside per-document sessions.
+pub fn copy_design(app: &mut SolveApp) -> bool {
+    let Some(path) = app.session.path.clone().filter(|_| !app.session.is_dirty()) else {
+        app.set_status("Save this design before copying it as a linked component", true);
+        return false;
+    };
+    app.linked_design_clipboard = Some(path);
+    leave_text(format!("SolidCraft linked design: {}", app.session.doc.name));
+    app.set_status("Copied design: switch to the assembly and paste to insert a linked component", false);
+    true
 }
 
 /// Copy the selection: sketch geometry in a sketch, otherwise timeline features.
 pub fn copy(app: &mut SolveApp) -> bool {
+    if app.session.active_sketch.is_none() && app.tree.picked_components == [0] {
+        return copy_design(app);
+    }
     if app.session.active_sketch.is_some() {
         let entities = sketch_selection(app);
         if entities.is_empty() {
@@ -59,6 +82,7 @@ pub fn copy(app: &mut SolveApp) -> bool {
             return false;
         }
         let Ok(out) = app.run("sketch.copy", json!({ "entities": entities })) else { return false };
+        app.linked_design_clipboard = None;
         let n = out.get("curves").and_then(Value::as_u64).unwrap_or(0) + out.get("points").and_then(Value::as_u64).unwrap_or(0);
         let k = out.get("constraints").and_then(Value::as_u64).unwrap_or(0);
         let text = format!("SolidCraft sketch geometry: {n} entities, {k} constraints and dimensions");
@@ -72,6 +96,7 @@ pub fn copy(app: &mut SolveApp) -> bool {
         return false;
     }
     let Ok(out) = app.run("timeline.copy", json!({ "features": features })) else { return false };
+    app.linked_design_clipboard = None;
     let names: Vec<&str> = out.get("copied").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
     app.set_status(format!("Copied {}", names.join(", ")), false);
     leave_text(format!("SolidCraft features: {}", names.join(", ")));
@@ -90,6 +115,7 @@ pub fn cut(app: &mut SolveApp) -> bool {
         return false;
     }
     let Ok(out) = app.run("sketch.cut", json!({ "entities": entities })) else { return false };
+    app.linked_design_clipboard = None;
     let n = out.get("curves").and_then(Value::as_u64).unwrap_or(0) + out.get("points").and_then(Value::as_u64).unwrap_or(0);
     app.set_status(format!("Cut {n} sketch entities"), false);
     leave_text(format!("SolidCraft sketch geometry: {n} entities"));
@@ -123,6 +149,16 @@ pub fn paste(app: &mut SolveApp, at: Option<Pos2>) -> bool {
         let Ok(out) = app.run("sketch.paste", params) else { return false };
         let n = out.get("curves").and_then(Value::as_array).map_or(0, Vec::len) + out.get("points").and_then(Value::as_array).map_or(0, Vec::len);
         app.set_status(format!("Pasted {n} sketch entities (selected: drag them, or press M to move them)"), false);
+        return true;
+    }
+    if let Some(path) = app.linked_design_clipboard.clone() {
+        let Ok(out) = app.run("component.insert_design", json!({"path": path, "reuse": true})) else { return false };
+        if let Some(id) = out.get("occurrence").and_then(Value::as_u64) {
+            let mut movement = crate::browser::OccMove::new(id);
+            movement.baseline = app.session.doc.occurrences.iter().find(|o| o.id == id).map(|o| o.transform);
+            app.tree.occurrence_move = Some(movement);
+        }
+        app.set_status("Pasted linked component: use Move/Copy to position it", false);
         return true;
     }
     if app.session.clipboard.is_empty() {

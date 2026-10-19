@@ -319,6 +319,8 @@ pub struct SolveApp {
     pub menu: context_menu::MenuState,
     /// Browser tree state (reveal, groups being edited, occurrence moves).
     pub tree: browser::TreeState,
+    /// A saved design copied for insertion into another open document.
+    pub linked_design_clipboard: Option<String>,
     /// The S box (command search at the cursor): recent and pinned commands.
     pub sbox: shortcut_box::ShortcutBox,
     /// Keyboard shortcuts the user changed.
@@ -448,6 +450,7 @@ impl SolveApp {
             palette: palette::Palette::default(),
             menu: context_menu::MenuState::default(),
             tree: browser::TreeState::default(),
+            linked_design_clipboard: None,
             sbox: shortcut_box::ShortcutBox::default(),
             keymap: keymap::Keymap::default(),
             help: help::HelpState::default(),

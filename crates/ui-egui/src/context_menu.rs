@@ -692,6 +692,8 @@ fn component_items(app: &SolveApp, id: u64) -> Vec<Item> {
     }
     v.push(cmd(app, "component.create", "New Component").with(json!({ "parent": id })));
     if id == 0 {
+        v.push(act("ui.copyDesign", "Copy", "").key("Ctrl+C"));
+        v.push(act("ui.paste", "Paste", "").key("Ctrl+V").on(crate::edit_clipboard::can_paste(app)));
         v.push(cmd(app, "component.from_bodies", "Create Components from Bodies").with(json!({ "bodies": names })).on(!bodies.is_empty()));
     }
     v.push(Item::sep());
@@ -889,6 +891,7 @@ pub fn run_item(app: &mut SolveApp, item: &Item, at: Pos2) {
         "ui.delete" => delete(app),
         "ui.finishSketch" => app.finish_sketch(),
         "ui.copy" => drop(crate::edit_clipboard::copy(app)),
+        "ui.copyDesign" => drop(crate::edit_clipboard::copy_design(app)),
         "ui.cut" => drop(crate::edit_clipboard::cut(app)),
         "ui.paste" => drop(crate::edit_clipboard::paste(app, Some(at))),
         "ui.editSketchPattern" => {
