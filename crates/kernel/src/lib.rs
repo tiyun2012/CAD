@@ -134,6 +134,8 @@ mod sweep_rails_tests;
 mod tangent_cylinders;
 mod tess;
 #[cfg(test)]
+mod thin_face_tests;
+#[cfg(test)]
 mod thread_display_tests;
 #[cfg(test)]
 mod thread_tests;
