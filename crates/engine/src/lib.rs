@@ -1039,6 +1039,8 @@ mod pattern_suppress_tests;
 #[cfg(test)]
 mod profile_curves_tests;
 #[cfg(test)]
+mod profile_fallback_tests;
+#[cfg(test)]
 mod profile_refs_tests;
 #[cfg(test)]
 mod sketch_edit_removed_tests;
