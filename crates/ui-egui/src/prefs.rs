@@ -27,6 +27,7 @@ pub fn stored(get: impl Fn(&str) -> Option<String>) -> Option<String> {
 
 use crate::SolveApp;
 use crate::theme::Tokens;
+use crate::tool_modifiers::ModifierCombo;
 use crate::viewport::NavMode;
 
 pub const UNITS: [&str; 5] = ["mm", "cm", "m", "in", "ft"];
@@ -391,6 +392,16 @@ pub struct Prefs {
     pub agent_chat_window: Option<[f32; 4]>,
     /// Changes the agent may make for one message.
     pub agent_chat_turn_limit: u32,
+
+    // ---- Sketch / selection modifier bindings (classic defaults; alternate mapping is opt-in) ----
+    /// Modifier that suppresses sketch auto-snap while drawing or dragging a sketch point.
+    /// Default: Alt/Option. Set to Ctrl/Cmd for the alternate mapping.
+    pub suppress_sketch_snap: ModifierCombo,
+    /// Whether Alt/Option also frees gizmo / canvas manipulator arrows (Primary always does).
+    pub manipulator_free_alt: bool,
+    /// When true: Shift+click adds without removing; Primary toggles.
+    /// When false (default): Shift and Primary both toggle.
+    pub selection_shift_add_only: bool,
 }
 
 /// What a middle-button double-click in the view does.
@@ -487,6 +498,9 @@ impl Default for Prefs {
             agent_chat_popped: false,
             agent_chat_window: None,
             agent_chat_turn_limit: crate::agent_chat::gate::DEFAULT_TURN_LIMIT,
+            suppress_sketch_snap: ModifierCombo::CTRL_ALT,
+            manipulator_free_alt: true,
+            selection_shift_add_only: false,
         }
     }
 }
@@ -776,8 +790,15 @@ fn defaults(app: &mut SolveApp, page: usize) {
                 save_graphics(app);
             }
         }
-        5 => app.session.auto_project = true,
-        _ => app.ui.pick_bodies = false,
+        5 => {
+            app.session.auto_project = true;
+            p.suppress_sketch_snap = d.suppress_sketch_snap;
+            p.manipulator_free_alt = d.manipulator_free_alt;
+        }
+        _ => {
+            app.ui.pick_bodies = false;
+            p.selection_shift_add_only = d.selection_shift_add_only;
+        }
     }
 }
 
@@ -859,6 +880,25 @@ pub fn nav_mode(app: &SolveApp, button: NavButton, mods: Modifiers) -> Option<Na
 /// +1, or −1 when horizontal scrolling pans the other way (#2007).
 pub fn pan_sign_x(app: &SolveApp) -> f32 {
     if app.preferences.pan_reverse_x { -1.0 } else { 1.0 }
+}
+
+/// Whether the configured suppress-snap chord is held.
+pub fn suppress_sketch_snap_held(app: &SolveApp, m: Modifiers) -> bool {
+    let c = app.preferences.suppress_sketch_snap;
+    let held = crate::tool_modifiers::Held::from_modifiers(m);
+    // Classic default (`CTRL_ALT`): Ctrl/Cmd **or** Alt/Option each suppress snap.
+    // A single-key preference keeps the usual AtLeast match for that key only.
+    if c == ModifierCombo::CTRL_ALT {
+        return held.primary || held.alt;
+    }
+    c.held(m)
+}
+
+/// Primary always frees manipulator arrows; Alt/Option also frees when `manipulator_free_alt` is on.
+pub fn manipulator_free_held(app: &SolveApp, m: Modifiers) -> bool {
+    use crate::tool_modifiers::Held;
+    let held = Held::from_modifiers(m);
+    held.primary || (app.preferences.manipulator_free_alt && held.alt)
 }
 
 /// +1, or −1 when the wheel zooms the other way.
@@ -1489,11 +1529,50 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                 let _ = app.run("sketch.auto_project", json!({ "value": auto }));
             }
             ui.end_row();
+
+            ui.label("");
+            ui.end_row();
+            ui.label(RichText::new(crate::i18n::tr_label("Sketch modifiers")).strong());
+            ui.label("");
+            ui.end_row();
+
+            ui.label(crate::i18n::tr_label("Suppress auto-snap while drawing / dragging"));
+            snap_suppress_picker(ui, "pref_suppress_sketch_snap", &mut app.preferences.suppress_sketch_snap);
+            ui.end_row();
+            note(ui, crate::i18n::tr_label("ui.suppress_auto_snap_note"));
+
+            ui.label(crate::i18n::tr_label("Manipulator free drag also on Alt/Option"));
+            ui.checkbox(&mut app.preferences.manipulator_free_alt, "").on_hover_text(crate::i18n::tr_label(
+                "On: Alt/Option or Ctrl/Cmd on extrude / gizmo arrows disables value snapping. Off: Ctrl/Cmd only.",
+            ));
+            ui.end_row();
         }
         _ => {
             ui.label(crate::i18n::tr_label("Click selects whole bodies"));
             ui.checkbox(&mut app.ui.pick_bodies, "");
             ui.end_row();
+
+            ui.label("");
+            ui.end_row();
+            ui.label(RichText::new(crate::i18n::tr_label("Selection modifiers")).strong());
+            ui.label("");
+            ui.end_row();
+
+            ui.label(crate::i18n::tr_label("Shift+click adds without removing"));
+            ui.checkbox(&mut app.preferences.selection_shift_add_only, "").on_hover_text(crate::i18n::tr_label(
+                "On: Shift adds items, Ctrl/Cmd toggles. Off (default): Shift and Ctrl/Cmd both toggle.",
+            ));
+            ui.end_row();
+        }
+    });
+}
+
+/// Sketch snap-suppress picker: classic Ctrl/Cmd-or-Alt first, then single keys.
+fn snap_suppress_picker(ui: &mut egui::Ui, salt: &str, combo: &mut ModifierCombo) {
+    let label = combo.label();
+    egui::ComboBox::from_id_salt(salt).selected_text(label).show_ui(ui, |ui| {
+        for c in ModifierCombo::SNAP_SUPPRESS_CHOICES {
+            ui.selectable_value(combo, c, c.label());
         }
     });
 }
@@ -2100,6 +2179,47 @@ mod tests {
         assert!(!h.app.preferences.radial_context_menu, "Navigation defaults disable the ring");
         h.call("ui.prefs", json!({"button":"cancel"}));
         assert!(h.app.preferences.radial_context_menu, "Cancel restores the last Apply");
+    }
+
+    #[test]
+    fn tool_modifier_prefs_default_classic_and_persist() {
+        let d = Prefs::default();
+        assert_eq!(d.suppress_sketch_snap, ModifierCombo::CTRL_ALT);
+        assert!(d.manipulator_free_alt);
+        assert!(!d.selection_shift_add_only);
+        let old: Prefs = serde_json::from_value(json!({"nav": "solidworks"})).unwrap();
+        assert_eq!(old.suppress_sketch_snap, ModifierCombo::CTRL_ALT);
+        assert!(!old.selection_shift_add_only);
+        // Classic default: Ctrl/Cmd or Alt each suppress (`command` is primary on all hosts).
+        let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+        let alt = Modifiers { alt: true, ..Default::default() };
+        let shift = Modifiers { shift: true, ..Default::default() };
+        assert!(suppress_sketch_snap_held(&app, ctrl));
+        assert!(suppress_sketch_snap_held(&app, alt));
+        assert!(!suppress_sketch_snap_held(&app, shift));
+        control(
+            &mut app,
+            &json!({"open": "Sketch", "suppress_sketch_snap": {"shift": false, "ctrl": true, "alt": false}, "manipulator_free_alt": false}),
+        )
+        .unwrap();
+        control(&mut app, &json!({"button": "apply"})).unwrap();
+        control(&mut app, &json!({"open": "Selection", "selection_shift_add_only": true})).unwrap();
+        control(&mut app, &json!({"button": "apply"})).unwrap();
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL);
+        assert!(!app.preferences.manipulator_free_alt);
+        assert!(app.preferences.selection_shift_add_only);
+        let mut other = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        other.load_prefs(&app.prefs());
+        assert_eq!(other.preferences.suppress_sketch_snap, ModifierCombo::CTRL);
+        assert!(!other.preferences.manipulator_free_alt);
+        assert!(other.preferences.selection_shift_add_only);
+        control(&mut app, &json!({"open": "Sketch", "button": "defaults"})).unwrap();
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL_ALT);
+        assert!(app.preferences.manipulator_free_alt);
+        assert!(app.preferences.selection_shift_add_only, "Selection page setting stays until that page resets");
+        control(&mut app, &json!({"button": "cancel"})).unwrap();
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL);
     }
 
     #[test]

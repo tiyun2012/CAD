@@ -161,6 +161,7 @@ mod sketch_families;
 #[cfg(test)]
 mod sketch_guidance_ui_tests;
 pub mod sketch_modify_ui;
+mod sketch_move_ui;
 #[cfg(test)]
 mod sketch_modify_ui_tests;
 pub mod sketch_palette;
@@ -185,6 +186,7 @@ mod thin_extrude_tests;
 pub mod timeline;
 pub mod timeline_left;
 pub mod titlebar;
+pub mod tool_modifiers;
 pub mod toolbar;
 pub mod toolbar_custom;
 pub mod tools;

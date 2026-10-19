@@ -127,12 +127,8 @@ pub fn anchor(app: &SolveApp, d: &Dialog) -> Option<(Vec3, Option<Vec3>)> {
         Kind::Sheet(_) => (at, crate::dialogs_sheet::arrow(app, d).or(normal)),
         Kind::Plastic(_) => (at, normal),
         Kind::PatternRect { .. } => (at, d.inputs.get(1).and_then(|i| i.items.first()).and_then(|x| crate::dialogs::axis_of(app, x)).map(|a| a.1)),
-        // A sketch move's X Distance grows along the sketch's own x axis, so its drag arrow
-        // lies in the sketch plane. Scale has no arrow: a factor is not a length, and the
-        // square handle it wants is its own change.
-        Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. }) => {
-            (at, app.session.active_sketch.and_then(|id| st.sketch(id)).and_then(|ss| ss.plane.x.normalized()))
-        }
+        // Sketch move uses the planar triad in `show`, not a single distance arrow here.
+        Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. }) => (at, None),
         // The rectangular pattern's spacing grows along the direction it was given, which the
         // module works out per variant. Offset's arrow is already computed above, per picked
         // curve, and `arrow` returns None for it so that one stands.
@@ -269,16 +265,47 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
         app.dialog = Some(d);
         return;
     }
+    // Sketch move: planar triad / point-to-point line (same controls as solid Move).
+    if matches!(d.kind, Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. })) {
+        crate::sketch_move_ui::sync_p2p(app, &mut d);
+        let mut dragging = false;
+        let step = snap_step(app.cam.half_height());
+        if let Some(t) = crate::sketch_move_ui::triad(app, &d)
+            && let Some(g) = crate::gizmo::show(ui, painter, proj, egui::Id::new("sc_sketch_move_triad"), &t, step)
+        {
+            crate::sketch_move_ui::drag(app, &mut d, g);
+            dragging = true;
+        } else if let Some(line) = crate::sketch_move_ui::line_drag(app, &d) {
+            let _ = crate::gizmo::line_show(ui, painter, proj, egui::Id::new("sc_sketch_move_line"), &line, step);
+        }
+        let triad = crate::sketch_move_ui::triad(app, &d);
+        let at = triad.map(|t| t.center).or_else(|| anchor(app, &d).map(|(base, _)| base));
+        let focus = std::mem::take(&mut d.focus);
+        if let Some(bs) = at.and_then(|base| proj.to_screen(base))
+            && let Some((label, _, value)) = d.primary()
+        {
+            let off = if triad.is_some() { vec2(crate::gizmo::LEN_PX as f32 + 16.0, -12.0) } else { vec2(16.0, -30.0) };
+            value_box(ui, label, value, bs + off, focus || dragging);
+        }
+        app.dialog = Some(d);
+        return;
+    }
     // Move: the triad at the pivot; dragging it sets the distances and angles. Its value box
     // sits beside it and reads the move's main value, so a drag shows its number and typing
     // one sets it. The triad is the manipulator here, so the box comes without the drag arrow
     // every other dialog's value gets (`dir` is None below).
     if matches!(d.kind, Kind::Move { .. }) {
         let mut dragging = false;
+        let step = snap_step(app.cam.half_height());
         if let Some(t) = crate::dialogs_move::triad(app, &d)
-            && let Some(g) = crate::gizmo::show(ui, painter, proj, egui::Id::new("sc_move_triad"), &t, snap_step(app.cam.half_height()))
+            && let Some(g) = crate::gizmo::show(ui, painter, proj, egui::Id::new("sc_move_triad"), &t, step)
         {
             crate::dialogs_move::drag(app, &mut d, g);
+            dragging = true;
+        } else if let Some(line) = crate::dialogs_move::line_drag(app, &d)
+            && let Some(g) = crate::gizmo::line_show(ui, painter, proj, egui::Id::new("sc_move_line"), &line, step)
+        {
+            crate::dialogs_move::drag_line(&mut d, g);
             dragging = true;
         }
         // Read the triad again after the drag, so the box follows it in the same frame. Move
@@ -298,7 +325,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj
         app.dialog = Some(d);
         return;
     }
-    if let Some((base, dir)) = anchor(app, &d)
+    if !matches!(d.kind, Kind::SketchModify(crate::sketch_modify_ui::Mod::Move { .. }))
+        && let Some((base, dir)) = anchor(app, &d)
         && let Some(bs) = proj.to_screen(base)
     {
         draw(app, ui, painter, proj, &mut d, base, bs, dir);
@@ -606,8 +634,9 @@ fn drag_arrow(
         && let Some(p) = r.interact_pointer_pos()
         && let Some(v) = along(proj, p, base, n)
     {
+        crate::tool_modifiers::set_manipulator_dragging(true);
         let v = v - ui.data(|d| d.get_temp::<f64>(grab)).unwrap_or(0.0);
-        let free = ui.input(|i| i.modifiers.alt || i.modifiers.ctrl || i.modifiers.command);
+        let free = crate::tool_modifiers::manipulator_free();
         let step = snap_step(half_height);
         let mut v = if free { v } else { (v / step).round() * step };
         if !signed {
@@ -780,7 +809,8 @@ fn radius_spline_handles(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Pain
                 && let Some(p) = r.interact_pointer_pos()
                 && let Some(v) = along(proj, p, at(*u), e.n)
             {
-                let free = ui.input(|i| i.modifiers.alt || i.modifiers.ctrl || i.modifiers.command);
+                crate::tool_modifiers::set_manipulator_dragging(true);
+                let free = crate::tool_modifiers::manipulator_free();
                 let step = snap_step(half_height);
                 let v = if free { v } else { (v / step).round() * step };
                 // Zero only at an end, where the round closes to a point.
@@ -974,9 +1004,10 @@ fn taper_handle(
         && let Some(p) = r.interact_pointer_pos()
         && let Some(s) = along(proj, p, foot + span, e)
     {
+        crate::tool_modifiers::set_manipulator_dragging(true);
         let mut deg = s.atan2(l).to_degrees();
         let (lo, hi) = limits;
-        if ui.input(|i| i.modifiers.alt || i.modifiers.ctrl || i.modifiers.command) {
+        if crate::tool_modifiers::manipulator_free() {
             deg = deg.clamp(lo, hi);
         } else {
             // Whole degrees, rounded towards zero at a limit so they stay inside it.
@@ -1255,7 +1286,7 @@ fn rotation_handle(
                 .min_by(|a, b| (a - boundary).abs().total_cmp(&(b - boundary).abs()))
                 .unwrap_or_else(|| raw.clamp(bounds.0, bounds.1));
             let mut angle = (boundary_angle.clamp(bounds.0, bounds.1) * scale + offset).to_degrees();
-            if !ui.input(|input| input.modifiers.alt || input.modifiers.ctrl || input.modifiers.command) {
+            if !crate::tool_modifiers::manipulator_free() {
                 angle = (angle / 5.0).round() * 5.0;
             }
             if angle.abs() < 0.05 {
