@@ -490,6 +490,43 @@ fn tapered_extrude_of_lines_and_arcs() {
     assert!(e.to_string().contains("arc meets another edge at a corner"), "{e}");
 }
 
+/// A circle with a lobe on each side (four arcs of three circles, meeting at corners: the outline of
+/// a scale pocket with finger notches) tapered inward: every circle shrinks by d = z · tan 45°,
+/// and the corners go to where the shrunk circles cross, so each section is the union of the
+/// shrunk circles. Before, the arcs kept their end angles and the sides missed the corners (#2810).
+#[test]
+fn tapered_extrude_of_arcs_meeting_at_corners() {
+    let (r0, w0, c, h, a) = (49.2, 16.2, 41.0, 2.5, 45f64.to_radians());
+    let corner = |r: f64, w: f64| {
+        let x = (r * r - w * w + c * c) / (2.0 * c);
+        (x, (r * r - x * x).sqrt())
+    };
+    let (x, y) = corner(r0, w0);
+    let at = |cx: f64, px: f64, py: f64| (py).atan2(px - cx);
+    let lobed = Loop2 {
+        segs: vec![
+            Seg2::Arc { center: Vec2::ZERO, radius: r0, start: at(0.0, x, y), sweep: at(0.0, -x, y) - at(0.0, x, y) },
+            Seg2::Arc { center: Vec2::new(-c, 0.0), radius: w0, start: at(-c, -x, y), sweep: 2.0 * PI - 2.0 * at(-c, -x, y) },
+            Seg2::Arc { center: Vec2::ZERO, radius: r0, start: at(0.0, -x, -y), sweep: at(0.0, x, -y) - at(0.0, -x, -y) },
+            Seg2::Arc { center: Vec2::new(c, 0.0), radius: w0, start: at(c, x, -y), sweep: 2.0 * at(c, x, y) },
+        ],
+    };
+    let b = extrude_tapered(&Plane::XY, &Region2 { outer: lobed, holes: vec![] }, h, -1.0, -a).unwrap();
+    // Union of the circle and two lobes: the circle plus each lobe less its lens with the circle.
+    let area = |d: f64| {
+        let (r, w) = (r0 - d, w0 - d);
+        let lens = r * r * ((c * c + r * r - w * w) / (2.0 * c * r)).acos() + w * w * ((c * c + w * w - r * r) / (2.0 * c * w)).acos()
+            - 0.5 * ((-c + r + w) * (c + r - w) * (c - r + w) * (c + r + w)).sqrt();
+        PI * r * r + 2.0 * (PI * w * w - lens)
+    };
+    let k = 200;
+    let v: f64 = (0..k).map(|j| area((j as f64 + 0.5) * h / k as f64 * a.tan())).sum::<f64>() * h / k as f64;
+    let m = measure(&b).unwrap();
+    assert!(rel(m.volume, v) < 2e-4, "{} vs {v}", m.volume);
+    assert_eq!(m.merged.faces, 6);
+    assert!(m.bbox.max.z < 1e-6 && m.bbox.min.z > -h - 1e-6, "{:?}", m.bbox);
+}
+
 /// A circle drawn as four conics (the way free curves come, as in text) tapered inward: each
 /// conic's control polygon moves in by d, which for a circle is the exact smaller circle, so
 /// the solid is a cone frustum.
