@@ -14,6 +14,14 @@ Properties accepts the leaf occurrence ID and the full path. Move can use world 
 {"occurrence":4,"path":[2,4],"space":"world","translate":[10,0,0],"capture":false}
 ```
 
+A drag in the viewport, or `occurrence.drag`, moves one exact placement by a world translation:
+
+```json
+{"path":[2,4],"at":[0,0,10],"point":[20,0,10]}
+```
+
+It captures that placement's position (other pending positions stay pending) and is one undo step. With the design active, the viewport drags the placement on the picked body's path just inside the design; with a component placement active, the one just inside it. Grounded placements and placements that joints hold to something fixed are refused; a free chain of joints moves together, and a chain through a placement used several times is refused. The design's first top-level part is grounded when it is made (not when a design is opened); copies start free.
+
 World movement includes pending parent and child positions. The default space remains parent-local for existing scripts. Capture Position commits pending transforms; Revert Position drops them. Copying an occurrence copies that selected occurrence's effective transform, including its pending position.
 
 An occurrence definition inside a component is shared by every instance of that parent component. Moving, grounding, copying, or deleting that nested definition changes all its parent instances. Selecting its exact path determines the world frame used for movement and Properties; it does not create an independent child definition.

@@ -7,7 +7,7 @@ use crate::scenario::Harness;
 
 fn fixture() -> (Harness, u64, u64) {
     let mut h = Harness::new();
-    let part = h.app.run("component.create", json!({"name":"Block"})).unwrap();
+    let part = h.app.run("component.create", json!({"name":"Block","grounded":false})).unwrap();
     let component = part["component"].as_u64().unwrap();
     let occurrence = part["occurrence"].as_u64().unwrap();
     h.app.run("solid.box", json!({"length":10,"width":10,"height":10})).unwrap();
