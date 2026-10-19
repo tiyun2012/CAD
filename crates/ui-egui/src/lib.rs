@@ -11,6 +11,7 @@
 pub mod access;
 pub mod agent_chat;
 pub mod agent_cursor;
+pub mod bom_panel;
 pub mod browser;
 pub mod canvas;
 #[cfg(test)]
@@ -313,6 +314,8 @@ pub struct SolveApp {
     pub params: Option<params_dialog::ParamsDialog>,
     /// The Design Properties window, when open.
     pub design_properties: Option<design_properties::DesignProperties>,
+    /// The Bill of Materials window, when open.
+    pub bom: Option<bom_panel::BomPanel>,
     material_card_review: Option<material_card_review::ReviewWindow>,
     pub palette: palette::Palette,
     /// Context menus, rename box and Properties window.
@@ -444,6 +447,7 @@ impl SolveApp {
             dialog: None,
             params: None,
             design_properties: None,
+            bom: None,
             material_card_review: None,
             palette: palette::Palette::default(),
             menu: context_menu::MenuState::default(),
@@ -805,6 +809,10 @@ impl SolveApp {
         }
         if matches!(id, "document.metadata" | "document.metadata.set") {
             design_properties::open(self);
+            return;
+        }
+        if id == "assembly.bom" {
+            bom_panel::open(self);
             return;
         }
         if id == "sketch.finish" {
@@ -1436,6 +1444,7 @@ impl SolveApp {
         self.resolve_fit(ui.ctx());
         params_dialog::show(self, ui.ctx());
         design_properties::show(self, ui.ctx());
+        bom_panel::show(self, ui.ctx());
         material_card_review::show(self, ui.ctx());
         recovery_ui::show(self, ui.ctx());
         stand_up::show(self, ui.ctx());
