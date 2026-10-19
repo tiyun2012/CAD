@@ -14,7 +14,7 @@
 //! band, a hole that is not round all the way, a pin end inside the hole), the overlap is not
 //! answered here and the caller takes the general boolean.
 
-use solidcraft_geom::{Aabb3, UnitVec3, Vec3};
+use solidcraft_geom::{Aabb3, Triangle, UnitVec3, Vec3};
 
 use crate::body::Body;
 use crate::{BoolOp, FaceSurface};
@@ -229,7 +229,7 @@ fn walls(b: &Body, cylinders: Vec<Wall>, same: f64) -> Option<Vec<Wall>> {
             if *f as usize != face {
                 continue;
             }
-            let Some([p, q, r]) = mesh.tri(t) else { continue };
+            let Some(Triangle([p, q, r])) = mesh.tri(t) else { continue };
             let c = (p + q + r) / 3.0;
             let radial = (c - origin) - axis * (c - origin).dot(axis);
             facing += (q - p).cross(r - p).dot(radial);
