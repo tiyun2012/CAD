@@ -175,6 +175,7 @@ pub mod smart_extrude;
 #[cfg(test)]
 mod smart_extrude_ui_tests;
 pub mod space_mouse;
+pub mod space_mouse_calibration;
 pub mod stand_up;
 #[cfg(test)]
 mod sweep_dialog_tests;
@@ -407,6 +408,8 @@ pub struct SolveApp {
     pub flat_view: dialogs_sheet::FlatView,
     /// The start page.
     pub home: home::HomeState,
+    /// The 3D mouse: which device, its reading, and the calibration window.
+    pub space_mouse: space_mouse::Input,
     pub file_load: file_load::FileLoad,
     /// The other open designs (tabs).
     pub docs: documents::Documents,
@@ -497,6 +500,7 @@ impl SolveApp {
             pending_fit: None,
             flat_view: Default::default(),
             home: home::HomeState::default(),
+            space_mouse: Default::default(),
             file_load: file_load::FileLoad::default(),
             docs: documents::Documents::default(),
             applied_fonts_language: "en".into(),

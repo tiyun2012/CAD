@@ -283,6 +283,10 @@ pub struct Prefs {
     pub space_mouse_reverse: [bool; 6],
     /// Per physical axis of the cap, a multiplier on top of `space_mouse_speed`; 0 switches it off.
     pub space_mouse_axis_speed: [f32; 6],
+    /// Per 3D mouse (`space_mouse::Input::device`), the calibration that puts its axes on
+    /// 3Dconnexion's. A device without one is read as it reports.
+    #[serde(deserialize_with = "calibrations_that_read")]
+    pub space_mouse_calibrations: std::collections::BTreeMap<String, solidcraft_space_mouse::Calibration>,
     /// Anti-aliasing samples (applies on restart).
     pub msaa: u32,
     /// Soft contact shading in the GPU viewport; optional and applied immediately.
@@ -435,6 +439,7 @@ impl Default for Prefs {
             space_mouse_speed: 1.0,
             space_mouse_reverse: [false; 6],
             space_mouse_axis_speed: [1.0; 6],
+            space_mouse_calibrations: Default::default(),
             msaa: 4,
             ambient_occlusion: false,
             grid_follows_view: false,
@@ -749,6 +754,7 @@ fn defaults(app: &mut SolveApp, page: usize) {
             p.space_mouse_speed = d.space_mouse_speed;
             p.space_mouse_reverse = d.space_mouse_reverse;
             p.space_mouse_axis_speed = d.space_mouse_axis_speed;
+            // The 3D mice the user calibrated stay: a calibration describes the device.
             p.look_at_anim = d.look_at_anim;
             p.look_at_speed = d.look_at_speed;
             p.middle_double_click = d.middle_double_click;
@@ -1039,6 +1045,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     }
     if !app.prefs_window.open {
         app.prefs_window.snapshot = None;
+        // Calibration opens from here and ends with it, so the cap moves the view again.
+        app.space_mouse.calibrating = None;
         return;
     }
     if app.prefs_window.snapshot.is_none() {
@@ -1107,6 +1115,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     if let Some(w) = &shown {
         crate::scenario::publish_rect("prefs:window", w.response.rect);
     }
+    crate::space_mouse_calibration::show(app, ctx);
     if app.preferences.msaa != before.msaa {
         save_graphics(app);
     }
@@ -1353,6 +1362,42 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                         }
                     });
                 });
+                ui.end_row();
+            }
+            ui.label(app.tr("ui.space_mouse_calibration"));
+            ui.horizontal(|ui| {
+                let device = app.space_mouse.device.clone();
+                let saved = device.as_ref().is_some_and(|device| app.preferences.space_mouse_calibrations.contains_key(device));
+                ui.add_enabled_ui(app.preferences.space_mouse_enabled && device.is_some(), |ui| {
+                    if ui.button(app.tr("ui.space_mouse_calibrate")).on_hover_text(app.tr("ui.space_mouse_calibrate_tip")).clicked() {
+                        crate::space_mouse_calibration::start(app);
+                    }
+                    if saved && ui.button(app.tr("ui.space_mouse_forget")).clicked()
+                        && let Some(device) = &device
+                    {
+                        app.preferences.space_mouse_calibrations.remove(device);
+                    }
+                });
+                // With the device it's about, so it's clear which calibration is in use.
+                ui.label(match (&device, saved) {
+                    (None, _) => app.tr("ui.space_mouse_none").to_owned(),
+                    (Some(device), true) => format!("{} ({device})", app.tr("ui.space_mouse_calibrated")),
+                    (Some(device), false) => format!("{} ({device})", app.tr("ui.space_mouse_not_calibrated")),
+                });
+            });
+            ui.end_row();
+            // The calibrated device's dead zone, adjustable after calibrating.
+            let enabled = app.preferences.space_mouse_enabled;
+            let (label, tip) = (app.tr("ui.space_mouse_dead_zone").to_owned(), app.tr("ui.space_mouse_dead_zone_tip").to_owned());
+            let (device, raw) = (app.space_mouse.device.clone(), app.space_mouse.raw.into());
+            if let Some(calibration) = device.and_then(|device| app.preferences.space_mouse_calibrations.get_mut(&device)) {
+                ui.label(label);
+                ui.add_enabled_ui(enabled, |ui| {
+                    crate::space_mouse_calibration::dead_zone_slider(ui, &mut calibration.dead_zone_share).on_hover_text(tip);
+                });
+                ui.end_row();
+                ui.label("");
+                crate::space_mouse_calibration::dead_zone_pads(ui, calibration, raw);
                 ui.end_row();
             }
             note(ui, crate::i18n::tr_label("Move and rotate the view together; sketches use pan and zoom only."));
@@ -1625,6 +1670,24 @@ pub fn control(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::
     Ok(out)
 }
 
+/// The saved 3D mouse calibrations that still read. One this version can't read (a hand edit, a
+/// format from another release) is dropped on its own, with a log line, not with all the others.
+fn calibrations_that_read<'de, D: serde::Deserializer<'de>>(
+    saved: D,
+) -> Result<std::collections::BTreeMap<String, solidcraft_space_mouse::Calibration>, D::Error> {
+    let saved = std::collections::BTreeMap::<String, serde_json::Value>::deserialize(saved)?;
+    Ok(saved
+        .into_iter()
+        .filter_map(|(device, calibration)| match serde_json::from_value(calibration) {
+            Ok(calibration) => Some((device, calibration)),
+            Err(error) => {
+                log::warn!("preferences: the 3D mouse calibration for `{device}` can't be read ({error}); reading the device as it reports");
+                None
+            }
+        })
+        .collect())
+}
+
 /// Every theme the Theme list offers, as (id, name): the modes, the built-in theme files, then
 /// the imported ones.
 fn theme_choices(app: &SolveApp) -> Vec<(String, String)> {
@@ -1677,16 +1740,26 @@ fn current_theme_file(app: &SolveApp) -> serde_json::Value {
     }
 }
 
-/// Fold a setting an older release kept in its own field into the one this version reads.
-/// `orbit_cursor` (`true` = the point under the cursor) became `orbit_around`.
 /// The cap's physical axes, in the order of `Prefs::space_mouse_reverse`.
-const SPACE_MOUSE_AXES: [&str; 6] = ["Push left / right", "Push forward / back", "Lift / press", "Tilt forward / back", "Tilt left / right", "Twist"];
+pub(crate) const SPACE_MOUSE_AXES: [&str; 6] =
+    ["Push left / right", "Push forward / back", "Lift / press", "Tilt forward / back", "Tilt left / right", "Twist"];
 
+/// Fold a setting an older release kept in its own field into the one this version reads.
+/// `orbit_cursor` (`true` = the point under the cursor) became `orbit_around`. A 3D mouse
+/// calibration that can't be used as it is (a hand edit) is dropped, so the device is read as it
+/// reports rather than spinning the view.
 pub fn migrate(mut p: Prefs) -> Prefs {
     if p.orbit_cursor {
         p.orbit_around = OrbitAround::Cursor;
         p.orbit_cursor = false;
     }
+    p.space_mouse_calibrations.retain(|device, calibration| {
+        let usable = calibration.is_usable();
+        if !usable {
+            log::warn!("preferences: the 3D mouse calibration for `{device}` can't be used as it is; reading the device as it reports");
+        }
+        usable
+    });
     p
 }
 
