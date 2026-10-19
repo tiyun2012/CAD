@@ -28,7 +28,7 @@ pub static COMMANDS: &[CommandSpec] = &[
          expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
     CommandSpec::new("joint.as_built", "As-Built Joint", as_built).at("SOLID", "ASSEMBLE").icon("as_built").params(
-        "type, a: occurrence, b: occurrence (stay where they are); at?: joint origin (default: b's origin) — the joint's frame; \
+        "type, a: occurrence, b: occurrence (stay where they are); at?: joint origin (default: b's origin) — the joint's frame; one on a or b is kept on its face or hole there, so the joint follows it as the design changes; \
          name?; limits?: [[min, max] | null…]; quiet?: bool",
     ),
     CommandSpec::new("joint.rigid_group", "Rigid Group", rigid_group).at("SOLID", "ASSEMBLE").icon("rigid_group").params("occurrences: [ids or names] (move together, as they are)"),
@@ -654,15 +654,21 @@ fn as_built(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = kind_param(p, cmd)?;
     let (oa, ob) = (occurrence_id(s, p.get("a"), cmd)?, occurrence_id(s, p.get("b"), cmd)?);
     // The joint's frame in the world: the given origin, or B's component origin.
-    let w = match p.get("at") {
-        Some(v) => {
-            let o = origin_param(s, Some(v), cmd)?;
-            s.doc.origin_world(&s.model.state(), &o).map_err(|e| bad(cmd, e.to_string()))?
-        }
+    let at = p.get("at").map(|v| origin_param(s, Some(v), cmd)).transpose()?;
+    let w = match &at {
+        Some(o) => s.doc.origin_world(&s.model.state(), o).map_err(|e| bad(cmd, e.to_string()))?,
         None => joints::occurrence_world(&s.doc, ob),
     };
-    let fa = s.doc.frame_in_occurrence(oa, &w).ok_or_else(|| bad(cmd, "occurrence transform"))?;
-    let fb = s.doc.frame_in_occurrence(ob, &w).ok_or_else(|| bad(cmd, "occurrence transform"))?;
+    // An origin on A or B is kept as it is on that side, so the joint follows its face or hole
+    // as the design changes; the other side holds the frame where it is now.
+    let side = |occ: u64| -> Result<Snap> {
+        match &at {
+            Some(o) if o.occurrence == occ => Ok(o.snap.clone()),
+            _ => s.doc.frame_in_occurrence(occ, &w).ok_or_else(|| bad(cmd, "occurrence transform")),
+        }
+    };
+    let fa = side(oa)?;
+    let fb = side(ob)?;
     let id = next_joint_id(s, cmd)?;
     let name = str_(p, "name").map(str::to_string).unwrap_or_else(|| format!("Joint{id}"));
     let n = kind.dofs().len();
@@ -1400,6 +1406,9 @@ pub(crate) fn overlapping_pairs(boxes: &[Aabb3], limit: usize) -> (Vec<(usize, u
     (pairs, skipped)
 }
 
+#[cfg(test)]
+#[path = "joints_as_built_tests.rs"]
+mod as_built_tests;
 #[cfg(test)]
 #[path = "joint_edge_tests.rs"]
 mod edge_tests;
