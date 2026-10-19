@@ -132,9 +132,13 @@ People trust SolidCraft with their designs; a crash loses their work. **This out
 - Before working on issue #N, check nobody has it: `gh pr list -R bherbruck/solidcraft --state open --search "#N"`.
 - If none, branch from the latest `origin/main`, `git commit --allow-empty -m "claim: #N"`, push,
   and open a **draft** PR titled `<summary> (#N)` right away. **The lowest-numbered open PR for an
-  issue wins**; if yours lost, close it. Don't claim by commenting or by editing files.
+  issue wins**; if yours lost, close it. A comment or file edit alone does not replace the draft PR.
+- After opening the draft PR, comment `/claim` on the issue so the bot records the claimant and
+  adds the `in progress` label. **Do both:** the draft PR establishes ownership and `/claim` marks
+  the issue as taken. Reference `#N` in the PR so the bot can find it.
 - Push work in progress at least daily. A draft with no pushes for 72 hours may be taken over:
   comment on it first, then open your own claim (you may start from its branch).
+  This takeover policy is separate from the bot's automatic cleanup deadlines in CONTRIBUTING.md.
 - On a shared build machine, check the load before a big build (`cut -d' ' -f1 /proc/loadavg`)
   and wait while it is over 24; build with `nice`.
 
