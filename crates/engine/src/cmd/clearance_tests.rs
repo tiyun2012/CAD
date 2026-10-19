@@ -322,3 +322,53 @@ fn a_roller_pressed_into_a_large_plate_is_reported() {
     let want = (r * r * ((r - depth) / r).acos() - (r - depth) * (r * r - (r - depth) * (r - depth)).sqrt()) * length;
     assert!((f(&overlaps[0]["volume_mm3"]) - want).abs() < 0.01 * want, "{want} {res}");
 }
+
+/// A pin turned from a profile (its wall in three faces) in the bore of a tube of its own size
+/// (in two faces), its end inside the bore, a hair off the axis, and a slit tube with the pin
+/// through it: touching, not overlapping. Their facets cross where one body's faces end on the
+/// shared cylinder, and the pairs were left unchecked ("could not be intersected there").
+#[test]
+fn a_turned_pin_in_a_bore_of_its_size_is_contact() {
+    let mut s = Session::default();
+    let pin = |s: &mut Session, name: &str, off: [f64; 3], z0: f64, z1: f64| {
+        run(s, "sketch.create", json!({"plane": {"origin": off, "x_dir": [1, 0, 0], "y_dir": [0, 0, 1]}}));
+        run(s, "sketch.rectangle.two_point", json!({"p0": [0, z0], "p1": [3, z1]}));
+        run(s, "solid.revolve", json!({"axis": "y", "body_name": name}));
+    };
+    let tube = |s: &mut Session, name: &str, x: f64| {
+        run(s, "solid.cylinder", json!({"radius": 5.25, "height": 19.55, "base": [x, 0, 0], "body_name": name}));
+        run(s, "solid.cylinder", json!({"radius": 3, "height": 19.55, "base": [x, 0, 0], "operation": "cut", "targets": [name]}));
+    };
+    pin(&mut s, "Pin", [2.2e-8, 4.7e-7, 0.0], -2.35, 9.65);
+    tube(&mut s, "Tube", 0.0);
+    pin(&mut s, "Through", [30.0, 0.0, 0.0], -3.0, 22.0);
+    tube(&mut s, "Slit", 30.0);
+    run(&mut s, "solid.box", json!({"length": 8, "width": 0.1, "height": 21, "corner": [22, -0.05, -1], "operation": "cut", "targets": ["Slit"]}));
+    let r = run(&mut s, "inspect.clearance", json!({"bodies": ["Pin", "Through"], "against": ["Tube", "Slit"], "clearance": 1e-6}));
+    assert_eq!(r["unchecked"].as_array().map(Vec::len), Some(0), "{r}");
+    assert_eq!(r["overlaps"].as_array().map(Vec::len), Some(0), "{r}");
+    let near = r["near"].as_array().cloned().unwrap_or_default();
+    assert_eq!(near.iter().map(pair).collect::<Vec<_>>(), [["Pin", "Tube"], ["Slit", "Through"]], "{r}");
+    assert!(near.iter().all(|n| f(&n["distance_mm"]) == 0.0 && n.get("overlap_mm3").is_none()), "{r}");
+}
+
+/// A pin of a bore's size through a D-bore whose flat is 0.022 mm inside the pin shares a
+/// sliver with the tube along the whole bore (the circular segment beyond the flat, 0.21 mm³):
+/// an overlap, not contact. Only the facetings of the shared cylinder may cross unseen; the flat
+/// reaches into it.
+#[test]
+fn a_pin_through_a_d_bore_of_its_size_overlaps_the_flat() {
+    let (r, flat, length) = (3.0_f64, 2.978_f64, 19.55);
+    let mut s = Session::default();
+    run(&mut s, "solid.cylinder", json!({"radius": 5.25, "height": length, "base": [0, 0, 0], "body_name": "Tube"}));
+    run(&mut s, "solid.cylinder", json!({"radius": r, "height": length, "base": [0, 0, 0], "operation": "cut", "targets": ["Tube"]}));
+    run(&mut s, "solid.box", json!({"length": 1, "width": 2, "height": length, "corner": [flat, -1, 0], "operation": "join", "targets": ["Tube"]}));
+    run(&mut s, "solid.cylinder", json!({"radius": r, "height": length + 6.0, "base": [0, 0, -3], "operation": "new", "body_name": "Pin"}));
+    let res = run(&mut s, "inspect.clearance", json!({"bodies": ["Pin"], "against": ["Tube"], "clearance": 1e-6}));
+    let want = (r * r * (flat / r).acos() - flat * (r * r - flat * flat).sqrt()) * length;
+    let overlaps = res["overlaps"].as_array().cloned().unwrap_or_default();
+    assert!(res["near"].as_array().is_none_or(|n| n.is_empty()), "{res}");
+    assert_eq!(res["unchecked"].as_array().map(Vec::len), Some(0), "{res}");
+    assert_eq!(overlaps.len(), 1, "{res}");
+    assert!((f(&overlaps[0]["volume_mm3"]) - want).abs() < 0.05 * want, "{want} {res}");
+}
