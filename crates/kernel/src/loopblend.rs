@@ -12,7 +12,7 @@ use solidcraft_geom::Vec3;
 use truck_modeling::{self as mt, builder};
 
 use crate::blend::too_large;
-use crate::body::{Solid, from_p3, p3, v3};
+use crate::body::{CurveRange, Solid, from_p3, p3, v3};
 use crate::record::Rebuild;
 use crate::{KernelError, Result};
 
@@ -127,11 +127,10 @@ fn offset_profile(prev: &Seg, cur: &Seg, n: Vec3, side: f64, r: f64, round: bool
 
 /// The exact shape of an oriented loop edge (a line, or an arc found from samples).
 fn seg_of(e: &mt::Edge, tol: f64) -> Option<Seg> {
-    use mt::{BoundedCurve, ParametricCurve};
+    use mt::ParametricCurve;
     let (a, b) = (from_p3(e.front().point()), from_p3(e.back().point()));
     let c = e.oriented_curve();
-    let (t0, t1) = c.range_tuple();
-    let pts: Vec<Vec3> = (0..=16).map(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 16.0))).collect();
+    let pts: Vec<Vec3> = (0..=16).map(|k| from_p3(c.subs(c.range().step(k, 16)))).collect();
     let closed = a.dist(b) < tol;
     if !closed && pts.iter().all(|p| p.dist_to_segment(a, b) < tol) {
         return Some(Seg::Line { a, b });
@@ -170,7 +169,7 @@ fn seg_of(e: &mt::Edge, tol: f64) -> Option<Seg> {
 /// Whether an edge is a straight segment: a line, or a curve whose points all lie on the chord
 /// (the contact lines of a rolling-ball blend between parallel walls are such curves).
 fn is_straight(e: &mt::Edge, tol: f64) -> bool {
-    use mt::{BoundedCurve, ParametricCurve};
+    use mt::ParametricCurve;
     if matches!(e.curve(), mt::Curve::Line(_)) {
         return true;
     }
@@ -179,8 +178,7 @@ fn is_straight(e: &mt::Edge, tol: f64) -> bool {
         return false;
     }
     let c = e.curve();
-    let (t0, t1) = c.range_tuple();
-    (0..=16).all(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / 16.0)).dist_to_segment(a, b) < tol)
+    (0..=16).all(|k| from_p3(c.subs(c.range().step(k, 16))).dist_to_segment(a, b) < tol)
 }
 
 /// `p` turned about the line (c, axis) by `ang`.

@@ -1,6 +1,7 @@
 //! Bounded export of procedural intersections as ordinary spatial cubic splines.
 //! The stored tolerance is the fitting target; the result is always provisional.
 use super::*;
+use crate::body::CurveRange;
 
 fn point_at(c: &mt::Curve, t: f64, budget: &mut usize) -> Result<mt::Point3> {
     *budget = budget.checked_sub(1).ok_or_else(|| invalid("intersection fitting budget"))?;
@@ -12,8 +13,8 @@ fn point_at(c: &mt::Curve, t: f64, budget: &mut usize) -> Result<mt::Point3> {
 }
 pub(super) fn fit_intersection(c: &mt::Curve, budget: &mut usize) -> Result<b::Curve> {
     let tolerance = 1e-4;
-    let (start, end) = c.range_tuple();
-    if !start.is_finite() || !end.is_finite() || start >= end {
+    let r = c.range();
+    if !r.lo().is_finite() || !r.hi().is_finite() || r.lo() >= r.hi() {
         return Err(invalid("intersection range"));
     }
     // Fit each smooth parameter interval using spatial samples, without backend derivative conventions.
@@ -21,19 +22,19 @@ pub(super) fn fit_intersection(c: &mt::Curve, budget: &mut usize) -> Result<b::C
     let mt::Curve::IntersectionCurve(intersection) = c else {
         return Err(invalid("expected intersection"));
     };
-    let mut breaks = vec![start, end];
+    let mut breaks = vec![r.lo(), r.hi()];
     match intersection.leader() {
         mt::Leader::Polyline(points) => {
             if points.len() > 4096 {
                 return Err(invalid("intersection parameter budget"));
             }
-            breaks.extend((0..points.len()).map(|i| i as f64).filter(|t| *t > start && *t < end));
+            breaks.extend((0..points.len()).map(|i| i as f64).filter(|t| *t > r.lo() && *t < r.hi()));
         }
         mt::Leader::BSpline(curve) => {
             if curve.knot_vec().len() > 4096 {
                 return Err(invalid("intersection parameter budget"));
             }
-            breaks.extend(curve.knot_vec().iter().copied().filter(|t| *t > start && *t < end));
+            breaks.extend(curve.knot_vec().iter().copied().filter(|t| *t > r.lo() && *t < r.hi()));
         }
     }
     breaks.sort_by(f64::total_cmp);
@@ -76,7 +77,7 @@ pub(super) fn fit_intersection(c: &mt::Curve, budget: &mut usize) -> Result<b::C
     }
     let first = pieces.first().ok_or_else(|| invalid("empty intersection fit"))?;
     let mut points = vec![point(first.2[0])];
-    let mut knots = vec![start; 4];
+    let mut knots = vec![r.lo(); 4];
     for (i, (_, b, controls)) in pieces.iter().enumerate() {
         points.extend(controls.iter().skip(1).copied().map(point));
         knots.extend(std::iter::repeat_n(*b, if i + 1 == pieces.len() { 4 } else { 3 }));

@@ -1,6 +1,6 @@
 //! The truck adapter. Persisted data belongs to solidcraft_geom::brep, never truck.
 use super::{Result, invalid};
-use mt::{BoundedCurve, EuclideanSpace, InnerSpace, Invertible, ParametricCurve, Transform, Transformed};
+use mt::{EuclideanSpace, InnerSpace, Invertible, ParametricCurve, Transform, Transformed};
 use solidcraft_geom::brep as b;
 use truck_modeling as mt;
 use truck_topology::compress as t;
@@ -293,6 +293,7 @@ fn load_surface(s: b::Surface) -> Result<mt::Surface> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::body::CurveRange;
 
     #[test]
     fn refuses_domain_or_axis_changes_instead_of_approximating() {
@@ -357,9 +358,8 @@ mod tests {
         let b::Curve::Intersection { fitting_tolerance, .. } = &record else { panic!("explicit fitted record required") };
         let tolerance = *fitting_tolerance;
         let restored = load_curve(record).unwrap();
-        let (a, b) = curve.range_tuple();
         for i in 0..=512 {
-            let t = a + (b - a) * i as f64 / 512.;
+            let t = curve.range().step(i, 512);
             assert!(curve.subs(t).distance(restored.subs(t)) <= tolerance * 1.1, "sample {i}: error {}", curve.subs(t).distance(restored.subs(t)));
         }
         let decoded = crate::decode_native_body(&crate::encode_native_body(&cut).unwrap()).unwrap();
