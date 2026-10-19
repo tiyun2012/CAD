@@ -342,9 +342,10 @@ completed drawings publish atomically. The browser still exports synchronously.
 
 - Associative shell-face sketches require a unique certified planar source. Nested shell
   attachments and ambiguous coincident sources remain unsupported.
-- G2 fillets: exact quintic blends of straight edges between planar faces, with one perpendicular
-  planar end face at each end. The UI and `solid.fillet` expose `curvature` (alias `g2`); the size
-  is an equivalent circular setback. Curved faces/edges, sloped ends and corner junctions remain unsupported.
+- G2 fillets: exact quintic blends of straight edges between planar faces, with one planar
+  end face at each end, including sloped ends (#2708). The UI and `solid.fillet` expose
+  `curvature` (alias `g2`); the size is an equivalent circular setback. Curved faces/edges,
+  multi-face ends and corner junctions remain unsupported.
 - Fillets and chamfers: constant, variable-radius and chord-length fillets; a radius per edge,
   rounds next to earlier rounds of another radius, and smooth corner patches where three rounds
   meet (a sphere for equal radii); perpendicular corner fillets after a closed ring of earlier

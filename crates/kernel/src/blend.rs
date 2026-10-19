@@ -1,9 +1,9 @@
 //! Edge fillets and chamfers as a local B-rep operation.
 //!
 //! Supported locally: a straight edge between two planar faces whose two end vertices each
-//! touch exactly one more planar face. Fillets require perpendicular end faces; chamfers
-//! intersect their offset rails with the end planes, including sloped walls. The end faces get an arc
-//! (fillet) or a line (chamfer) at the corner, and a cylindrical (or planar) face is inserted.
+//! touch exactly one more planar face. The offset rails intersect the end planes, including
+//! sloped walls. The end faces get an arc (round fillet), a quintic (G2 fillet) or a line
+//! (chamfer) at the corner, and a cylindrical, quintic or planar face is inserted.
 //! The result is exact. Edges meeting at an already blended corner, curved edges and other
 //! configurations are reported as not supported yet.
 
@@ -468,10 +468,8 @@ fn blend_geometry(
             [x, y] if shared(i1, y).is_some() && shared(i2, x).is_some() => (y, x),
             _ => return Err(unsupported("each end of the edge must touch exactly one more face")),
         };
-        if shape == Shape::Curvature
-            && (others.len() != 1 || faces.get(ga).and_then(|f| plane_normal(f)).is_none_or(|n| n.dot(d).abs() < 1.0 - 1e-12))
-        {
-            return Err(unsupported("G2 fillets require one planar end face perpendicular to the edge at each end"));
+        if shape == Shape::Curvature && (others.len() != 1 || faces.get(ga).and_then(|f| plane_normal(f)).is_none()) {
+            return Err(unsupported("G2 fillets require one planar end face at each end"));
         }
         // An end face that is not a plane, or meets the side faces in curves: the rails end where
         // they reach its surface, and the blend's end is where its surface meets the end face
@@ -879,6 +877,11 @@ fn blend_geometry(
     let rail_a = used_up(i1, &end0.ca, &end1.ca)?;
     let rail_b = used_up(i2, &end0.cb, &end1.cb)?;
     let vertex = |c: &Option<mt::Vertex>, p: Vec3| c.clone().unwrap_or_else(|| builder::vertex(p3(p)));
+    // Projection along the edge is affine, so projecting the six controls gives
+    // the exact quintic on an oblique end plane. The end-plane check above has
+    // already refused planes parallel to d. Use these same controls for the
+    // surface below, including where an outward slope extends past the old edge.
+    let g2_section = |p: Vec3, (o, n): (Vec3, Vec3)| g2_controls(p, t1, t2, s).map(|q| q - d * ((q - o).dot(n) / d.dot(n)));
     // Corner curves on the end faces (A → B): the blend's cross-section through the end vertex,
     // slid along the edge onto each end plane (an ellipse arc; the circle itself on a square
     // end face).
@@ -887,7 +890,7 @@ fn blend_geometry(
             return Ok(builder::line(va, vb));
         }
         if shape == Shape::Curvature {
-            let controls = g2_controls(p, t1, t2, s);
+            let controls = g2_section(p, plane);
             return Ok(builder::bezier(va, vb, controls.into_iter().skip(1).take(4).map(p3).collect()));
         }
         let c = centre(p);
@@ -1028,8 +1031,17 @@ fn blend_geometry(
     let blend_face = match shape {
         Shape::Flat => builder::try_attach_plane(&[wire]).map_err(|e| KernelError::Failed(format!("chamfer face: {e}")))?,
         Shape::Curvature => {
-            let controls = g2_controls(p0, t1, t2, s);
-            let ctrl = controls.into_iter().map(|p| vec![p3(p), p3(p + p1 - p0)]).collect();
+            let ([plane0], [plane1]) = (&end0.planes[..], &end1.planes[..]) else {
+                return Err(unsupported("G2 fillets require one planar end face at each end"));
+            };
+            let (start, end) = (g2_section(p0, *plane0), g2_section(p1, *plane1));
+            // A ruled patch between the two sections stays on the quintic's
+            // extrusion: corresponding controls differ only along d. Positive
+            // spans throughout their convex hull keep the surface from folding.
+            if start.iter().zip(&end).any(|(a, b)| !a.is_finite() || !b.is_finite() || (*b - *a).dot(d) <= tol) {
+                return Err(too_large("the blend is larger than the neighbouring faces"));
+            }
+            let ctrl = start.into_iter().zip(end).map(|(a, b)| vec![p3(a), p3(b)]).collect();
             let bsp = mt::BSplineSurface::new((mt::KnotVec::bezier_knot(5), mt::KnotVec::bezier_knot(1)), ctrl);
             let mut surf = mt::Surface::BSplineSurface(bsp);
             use mt::ParametricSurface3D;
@@ -1096,7 +1108,7 @@ fn g2_controls(p: Vec3, t1: Vec3, t2: Vec3, setback: f64) -> [Vec3; 6] {
 
 /// Curvature-continuous (G2) fillets between planar faces along straight edges.
 /// `radius` sets the same setback as a circular fillet; the profile is not circular.
-/// Each end must meet one planar face perpendicular to the edge. Unsupported
+/// Each end must meet one planar face, which may be oblique to the edge. Unsupported
 /// configurations are refused, never replaced with a G1 circular fillet.
 pub fn fillet_g2(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     body.require_brep("G2 fillet")?;
@@ -2522,6 +2534,115 @@ mod tests {
     }
 
     #[test]
+    fn g2_fillet_meets_sloped_planar_ends_with_zero_rail_curvature() {
+        use mt::{InnerSpace, ParametricCurve, ParametricSurface, SearchParameter};
+        // Inward and outward sloping ends, and one square end, in two orientations.
+        // Outward slopes need end curves beyond the old edge's axial range (#2708).
+        for plane in [Plane::XY, Plane::XZ] {
+            for (left, right) in [(-0.5, -0.5), (0.5, 0.5), (0.0, 0.5), (-0.25, 0.5)] {
+                let region = Region2 {
+                    outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(40.0, 0.0), Vec2::new(40.0 - right * 20.0, 20.0), Vec2::new(left * 20.0, 20.0)]),
+                    holes: vec![],
+                };
+                let body = crate::extrude(&plane, &[region], 0.0, 20.0).unwrap().pop().unwrap();
+                let pick = plane.to_world(Vec2::new(20.0, 0.0)) + plane.normal() * 20.0;
+                let out = fillet_g2(&body, &[pick], 5.0).unwrap();
+                assert!(out.validity().is_empty(), "{:?}", out.validity());
+                assert_eq!(out.crossed_face_loops().unwrap(), 0);
+                assert_eq!(out.face_count(), 7);
+                let solid = out.deep_copy();
+                let face = solid.face_iter().find(|f| matches!(f.surface(), mt::Surface::BSplineSurface(_))).unwrap();
+                let surf = face.surface();
+                let mut sections = 0;
+                for edge in face.edge_iter() {
+                    if let mt::Curve::BSplineCurve(c) = edge.curve() {
+                        for k in 0..=20 {
+                            let q = c.subs(f64::from(k) / 20.0);
+                            let uv = plane.to_local(from_p3(q));
+                            assert!((uv.x - left * uv.y).abs() < 1e-8 || (uv.x + right * uv.y - 40.0).abs() < 1e-8);
+                            let (u, v) = surf.search_parameter(q, None, 100).expect("end curve on the G2 surface");
+                            assert!((surf.subs(u, v) - q).magnitude() < 1e-8);
+                        }
+                        sections += 1;
+                    }
+                }
+                assert_eq!(sections, 2);
+                // A parameter swap on inversion is allowed; identify the rails by
+                // the original side planes and check the whole second fundamental form.
+                for along in [0.1, 0.5, 0.9] {
+                    let mut rails = 0;
+                    for (u, v) in [(0.0, along), (1.0, along), (along, 0.0), (along, 1.0)] {
+                        let q = from_p3(surf.subs(u, v));
+                        let y = plane.to_local(q).y;
+                        let z = (q - plane.origin).dot(plane.normal());
+                        let expected = if y.abs() < 1e-8 {
+                            plane.y
+                        } else if (z - 20.0).abs() < 1e-8 {
+                            plane.normal()
+                        } else {
+                            continue;
+                        };
+                        let n = surf.uder(u, v).cross(surf.vder(u, v)).normalize();
+                        assert!(n.cross(v3(expected)).magnitude() < 1e-8);
+                        for second in [surf.uuder(u, v), surf.uvder(u, v), surf.vvder(u, v)] {
+                            assert!(second.dot(n).abs() < 1e-8);
+                        }
+                        rails += 1;
+                    }
+                    assert_eq!(rails, 2);
+                }
+                // Analytic volume: the removed section has area 113 r² / 756
+                // and first moment ∫y dA = 13711 r³ / 486486, obtained by integrating
+                // the quintic's x(t)y'(t) and x(t)y(t)y'(t). Axial length is 40−(left+right)y.
+                let removed = 40.0 * 113.0 / 756.0 * 25.0 - (left + right) * 13711.0 / 486486.0 * 125.0;
+                let expected = 16000.0 - 4000.0 * (left + right) - removed;
+                let volume = out.tessellate(0.0001).unwrap().measure().volume;
+                assert!((volume - expected).abs() < 0.05, "{volume} vs {expected}");
+            }
+        }
+    }
+
+    #[test]
+    fn g2_fillet_on_concave_edge_meets_caps_sloped_in_both_directions() {
+        use mt::{ParametricCurve, ParametricSurface, SearchParameter};
+        let region = Region2 {
+            outer: Loop2::polygon(&[
+                Vec2::ZERO,
+                Vec2::new(20.0, 0.0),
+                Vec2::new(20.0, 10.0),
+                Vec2::new(10.0, 10.0),
+                Vec2::new(10.0, 20.0),
+                Vec2::new(0.0, 20.0),
+            ]),
+            holes: vec![],
+        };
+        let body = crate::extrude(&Plane::XY, &[region], 0.0, 20.0).unwrap().pop().unwrap();
+        // z -> z + 0.3x + 0.4y tilts both caps while leaving the vertical edge
+        // and its side planes unchanged. This shear preserves volume.
+        let body = crate::transform_matrix(&body, [[1.0, 0.0, 0.3, 0.0], [0.0, 1.0, 0.4, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]).unwrap();
+        let out = fillet_g2(&body, &[Vec3::new(10.0, 10.0, 17.0)], 2.0).unwrap();
+        assert!(out.validity().is_empty(), "{:?}", out.validity());
+        assert_eq!(out.crossed_face_loops().unwrap(), 0);
+        let solid = out.deep_copy();
+        let face = solid.face_iter().find(|f| matches!(f.surface(), mt::Surface::BSplineSurface(_))).unwrap();
+        let surf = face.surface();
+        for edge in face.edge_iter() {
+            if let mt::Curve::BSplineCurve(c) = edge.curve() {
+                for k in 0..=20 {
+                    let q = c.subs(f64::from(k) / 20.0);
+                    let height = q.z - 0.3 * q.x - 0.4 * q.y;
+                    assert!(height.abs() < 1e-8 || (height - 20.0).abs() < 1e-8);
+                    let (u, v) = surf.search_parameter(q, None, 100).unwrap();
+                    assert!(from_p3(surf.subs(u, v)).dist(from_p3(q)) < 1e-8);
+                }
+            }
+        }
+        let volume = out.tessellate(0.0001).unwrap().measure().volume;
+        let expected = 6000.0 + 113.0 / 756.0 * 4.0 * 20.0;
+        assert!((volume - expected).abs() < 0.02, "{volume} vs {expected}");
+    }
+
+    #[test]
     fn g2_fillet_refuses_invalid_and_unsupported_geometry() {
         let body = crate::build::box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
         let edge = [Vec3::new(20.0, 0.0, 10.0)];
@@ -2541,17 +2662,6 @@ mod tests {
             fillet_g2(&boss, &[Vec3::new(40.0, 4.0, 20.0)], 0.8),
             Err(KernelError::Failed(message)) if message.contains("G2 fillets require one planar end face")
         ));
-        for slope in [-0.5, 0.5] {
-            let region = Region2 {
-                outer: Loop2::polygon(&[Vec2::ZERO, Vec2::new(40.0, 0.0), Vec2::new(40.0 - slope * 20.0, 20.0), Vec2::new(slope * 20.0, 20.0)]),
-                holes: vec![],
-            };
-            let sloped = crate::extrude(&Plane::XY, &[region], 0.0, 20.0).unwrap().pop().unwrap();
-            assert!(matches!(
-                fillet_g2(&sloped, &[Vec3::new(20.0, 0.0, 20.0)], 2.0),
-                Err(KernelError::Failed(message)) if message.contains("G2 fillets require one planar end face")
-            ));
-        }
     }
 
     #[test]
