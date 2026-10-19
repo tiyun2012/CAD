@@ -847,7 +847,12 @@ impl Dialog {
             }
             Kind::Shell { thickness } => ("Thickness", ValueKind::Length, thickness),
             Kind::Draft { angle } => ("Angle", ValueKind::Angle, angle),
-            Kind::Hole { diameter, .. } => ("Diameter", ValueKind::Length, diameter),
+            Kind::Hole { diameter, opts, .. } => {
+                if opts.tapped {
+                    return None;
+                }
+                ("Diameter", ValueKind::Length, diameter)
+            }
             // A move's main value follows its type: a distance along X for the ones that
             // translate, the angle for Rotate. Point to Point is two picks with nothing to type.
             Kind::Move { mode, x, angle, .. } => match *mode {
@@ -2949,10 +2954,7 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         opts.tapped = tap == 1;
                         ui.end_row();
                         if opts.tapped {
-                            row_label(ui, "Size");
-                            let r = ui.add(egui::TextEdit::singleline(&mut opts.thread).hint_text("M5"));
-                            enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                            ui.end_row();
+                            enter |= crate::dialogs_thread::hole_rows(ui, &mut opts.thread);
                         }
                         if *kind == 0 {
                             row_label(ui, "Drill Point");
@@ -2971,9 +2973,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                             enter |= field(ui, &mut opts.tip_angle);
                             ui.end_row();
                         }
-                        row_label(ui, "Diameter");
-                        enter |= field(ui, diameter);
-                        ui.end_row();
+                        if !opts.tapped {
+                            row_label(ui, "Diameter");
+                            enter |= field(ui, diameter);
+                            ui.end_row();
+                        }
                         if *kind == 1 {
                             row_label(ui, "Counterbore Ø");
                             enter |= field(ui, cb_diameter);
@@ -4297,7 +4301,9 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             let mut out = Vec::new();
             for place in places {
                 let mut params = place;
-                params["diameter"] = json!(diameter);
+                if !opts.tapped {
+                    params["diameter"] = json!(diameter);
+                }
                 params["type"] = json!(ty);
                 if to_object_on(&d.inputs) {
                     params["to"] = to_object_point(&d.inputs).ok_or("select the object to drill to")?;
@@ -4307,7 +4313,8 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
                 if ty == "drilled" {
                     params["tip_angle"] = json!(opts.tip_angle);
                 }
-                if opts.tapped && !opts.thread.trim().is_empty() {
+                if opts.tapped {
+                    solidcraft_engine::doc::parse_metric_thread(&opts.thread).ok_or("select a valid metric thread size")?;
                     params["thread"] = json!(opts.thread.trim());
                 }
                 match *kind {
