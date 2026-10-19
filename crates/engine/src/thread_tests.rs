@@ -102,6 +102,27 @@ fn a_modelled_thread_that_would_cut_nothing_is_refused() {
     assert!(e.contains("this 17.2 mm shaft") && e.contains("make the shaft 20 mm for M20") && e.contains("thread this shaft M18"), "{e}");
 }
 
+/// Issue 2688: an M8 modelled thread in a 6 mm hole (narrower than its 6.65 mm minor diameter)
+/// was refused as "the face is too far from the thread's diameter". It says what is wrong and
+/// what to drill, as a hole that is too wide does; and the same for a shaft that is too thick.
+#[test]
+fn a_hole_too_narrow_or_a_shaft_too_thick_says_which_and_what_fits() {
+    let mut s = hex_nut(6.0);
+    let before = volume(&mut s, "Nut");
+    let e = s.execute("solid.thread", &json!({"face": [3.0, 0, 2], "designation": "M8", "modeled": true})).err().map(|e| e.to_string());
+    let e = e.unwrap_or_default();
+    assert!(e.contains("this 6 mm hole is too narrow for a modelled M8 thread") && e.contains("drill 6.75 mm for M8"), "{e}");
+    assert!(!e.contains("too far"), "{e}");
+    assert!((volume(&mut s, "Nut") - before).abs() < 1e-9);
+
+    let mut s = Session::default();
+    // 9 mm is close enough to M8 to be offered it, too thick to cut it.
+    run(&mut s, "solid.cylinder", json!({"radius": 4.5, "height": 10, "body_name": "Shaft"}));
+    let e = s.execute("solid.thread", &json!({"face": [4.5, 0, 5], "designation": "M8", "modeled": true})).err().map(|e| e.to_string());
+    let e = e.unwrap_or_default();
+    assert!(e.contains("this 9 mm shaft is too thick for a modelled M8 thread") && e.contains("make the shaft 8 mm for M8"), "{e}");
+}
+
 /// The limit is a quarter of the basic depth 5H/8: a hole up to 4.78 mm for M5 (4.86 mm for
 /// M5x0.5) still takes a modelled thread, a wider one is refused with that pitch's drill.
 #[test]

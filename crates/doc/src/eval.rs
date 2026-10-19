@@ -356,7 +356,21 @@ fn thread_groove(t: &ThreadInfo, radius: f64, open: (bool, bool)) -> Result<soli
         (r_root, p / 8.0, r_out, (p / 4.0 + 2.0 * (r_out - r_root) * slope) / 2.0)
     };
     if w0.max(w1) * 2.0 >= p * 0.98 {
-        return Err(DocError::Invalid("the face is too far from the thread's diameter".into()));
+        // The groove would be wider than a pitch: the face is far inside the thread (a hole
+        // narrower than its minor diameter, a shaft thicker than its major one, #2688).
+        let (m, dia) = (&t.designation, 2.0 * radius);
+        let alt = thread_for(dia, t.internal).map(|(n, q)| format_thread(n, q)).filter(|a| a != m);
+        let shown = show_mm(dia);
+        return Err(DocError::Invalid(if t.internal {
+            let alt = alt.map(|a| format!(", or thread this hole {a}")).unwrap_or_default();
+            format!(
+                "this {shown} mm hole is too narrow for a modelled {m} thread (its teeth would fill the hole); drill {} mm for {m}{alt}",
+                show_mm(d - p)
+            )
+        } else {
+            let alt = alt.map(|a| format!(", or thread this shaft {a}")).unwrap_or_default();
+            format!("this {shown} mm shaft is too thick for a modelled {m} thread; make the shaft {} mm for {m}{alt}", show_mm(d))
+        }));
     }
     let k = t.axis;
     let u = k.cross(if k.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) });
