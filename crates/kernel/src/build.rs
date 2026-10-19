@@ -1254,7 +1254,9 @@ pub fn extrude_tapered_between(plane: &Plane, region: &Region2, from: f64, to: f
     region_ok(region)?;
     let (t, sign) = (taper.tan(), dir_sign.signum());
     let (bottom_plane, top_plane) = (plane.offset(from * sign), plane.offset(to * sign));
-    let loops0 = oriented(region)?;
+    // A side drawn in collinear pieces slopes as one face over all of them, as a straight
+    // extrude's does (#1788).
+    let loops0 = oriented(region)?.map_loops(|l| l.merged_lines(continues_straight));
     let split: Vec<(Loop2, Vec<usize>)> = loops0.loops().map(|l| offset_splits(&l.lp, from.abs().max(to.abs()) * t)).collect();
     let ends = |h: f64| split.iter().map(|(lp, _)| offset_loop(lp, h * t)).collect::<Result<Vec<_>>>();
     let (bottoms, tops) = (ends(from)?, ends(to)?);
