@@ -2184,6 +2184,11 @@ fn chamfer_built(body: &Body, edges: &[Vec3], distance: f64) -> Result<Body> {
         let blend_or_curved = |cur: &Body, p: &Vec3| -> Result<Body> {
             blend(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer")
                 .or_else(|e| blend_with(cur, std::slice::from_ref(p), distance, Shape::Flat, "chamfer", true).map_err(|_| e))
+                .or_else(|e| {
+                    chamfer_tool_curved(cur, *p, distance)
+                        .and_then(|tool| cut_one(cur, &tool)?.ok_or_else(|| KernelError::Failed("the chamfer removed everything".into())))
+                        .map_err(|_| e)
+                })
         };
         for p in edges {
             let tool = chamfer_tool(&cur, *p, distance, 0);
@@ -2347,6 +2352,99 @@ impl Cutter {
 
 pub(crate) fn chamfer_tool(cur: &Body, p: Vec3, s: f64, k: usize) -> Result<Cutter> {
     chamfer_tool_sides(cur, p, s, None, k)
+}
+
+/// A straight plane/cylinder edge has one constant chamfer section. Sweep its cutter
+/// through the ends and let the boolean trim it against the actual end faces. In particular,
+/// a small planar seam left by a tangent cut need not be extended into a rounded end (#2408).
+fn chamfer_tool_curved(cur: &Body, pick: Vec3, distance: f64) -> Result<Cutter> {
+    guard("straight curved chamfer", || {
+        let size = cur.size();
+        let tolerance = (size * 1e-7).max(1e-9);
+        let (index, gap) = cur.nearest_edge(pick, (size * 2e-3).max(1e-3))?.ok_or_else(|| unsupported("no chamfer edge"))?;
+        if gap > size * 0.05 + 1e-3 {
+            return Err(unsupported("no nearby chamfer edge"));
+        }
+        let edge = Body::unique_edges(&cur.solid).into_iter().nth(index).ok_or_else(|| unsupported("chamfer edge"))?;
+        if !crate::curveblend::straight(&edge, tolerance * 10.0) {
+            return Err(unsupported("a straight plane/cylinder edge is required"));
+        }
+        let (p0, p1) = (vtx(edge.absolute_front()), vtx(edge.absolute_back()));
+        let along = (p1 - p0).normalized().ok_or_else(|| unsupported("zero-length chamfer edge"))?;
+        let faces: Vec<_> = cur.solid.face_iter().filter(|f| f.edge_iter().any(|e| e.id() == edge.id())).collect();
+        let [f1, f2] = faces.as_slice() else { return Err(unsupported("the edge must have two faces")) };
+        let kinds = (crate::surface_kind::surface_of(f1, size), crate::surface_kind::surface_of(f2, size));
+        let (normal, axis) = match kinds {
+            (Some(crate::FaceSurface::Plane { normal, .. }), Some(crate::FaceSurface::Cylinder { axis, .. }))
+            | (Some(crate::FaceSurface::Cylinder { axis, .. }), Some(crate::FaceSurface::Plane { normal, .. })) => (normal, axis),
+            _ => return Err(unsupported("a straight plane/cylinder edge is required")),
+        };
+        // A boolean intersection can carry slightly displaced ends and supporting surfaces.
+        // Check angular alignment here, then the swept contacts against the actual surfaces.
+        if normal.dot(axis).abs() > 1e-5 || axis.cross(along).len() > 1e-5 {
+            return Err(unsupported("the cylinder must run along the chamfer edge"));
+        }
+        let d = if axis.dot(along) < 0.0 { -axis } else { axis };
+        let mid = (p0 + p1) * 0.5;
+        let (n1, n2) = (
+            crate::curveblend::project(f1, mid, None).map(|p| p.1).ok_or_else(|| unsupported("chamfer normal"))?,
+            crate::curveblend::project(f2, mid, None).map(|p| p.1).ok_or_else(|| unsupported("chamfer normal"))?,
+        );
+        let used = f1.boundary_iters().into_iter().flatten().find(|e| e.id() == edge.id()).ok_or_else(|| unsupported("chamfer edge use"))?;
+        let tangent = (vtx(used.back()) - vtx(used.front())).normalized().ok_or_else(|| unsupported("chamfer tangent"))?;
+        if tangent.dot(n1.cross(n2)) <= 1e-9 {
+            return Err(unsupported("a convex chamfer edge is required"));
+        }
+        let (a, b) = crate::curveblend::straight_chamfer_contacts(f1, f2, mid, d, distance, tolerance)
+            .ok_or_else(|| unsupported("the chamfer section does not fit"))?;
+        let fit_tolerance = (size * 1e-5).clamp(1e-5, 0.001);
+        for (face, point) in [(*f1, a), (*f2, b)] {
+            for along in [-0.5, -0.25, 0.0, 0.25, 0.5] {
+                let swept = point + d * (along * p0.dist(p1));
+                if crate::curveblend::project(face, swept, None).is_none_or(|(q, _, _)| q.dist(swept) > fit_tolerance) {
+                    return Err(unsupported("the chamfer section varies along the edge"));
+                }
+            }
+        }
+        // Contacts must lie on the trimmed faces, not merely their infinite supports. A
+        // fine mesh and an inward probe larger than its chord error also reject a bevel that
+        // has already used up the top face. Reuse that mesh for all cutter clearance probes.
+        let mesh = cur.tessellate_with(tolerance * 10.0, true)?;
+        let inset = (tolerance * 100.0).min(distance * 0.01);
+        for (face, point) in [(*f1, a), (*f2, b)] {
+            let (_, normal, _) = crate::curveblend::project(face, point, None).ok_or_else(|| unsupported("chamfer contact"))?;
+            if !mesh.contains(point - normal * inset) {
+                return Err(too_large("the chamfer runs past a neighbouring face"));
+            }
+        }
+        let outward = (n1 + n2).normalized().ok_or_else(|| unsupported("chamfer direction"))?;
+        let across = (a - b).normalized().ok_or_else(|| unsupported("chamfer section"))?;
+        let reach = distance * 4.0 + size * 0.02;
+        let center = (a + b + mid) / 3.0;
+        let a = a + across * reach;
+        let b = b - across * reach;
+        if mesh.contains(a) || mesh.contains(b) {
+            return Err(unsupported("the chamfer cutter crosses a neighbouring face"));
+        }
+        let extension = (distance * 2.0).max(size * 0.01);
+        let half = p0.dist(p1) * 0.5;
+        if [-1.0, 1.0].into_iter().any(|side| mesh.contains(center + d * (side * (half + extension * 0.5)))) {
+            return Err(unsupported("chamfers ending at a concave corner"));
+        }
+        let plane = solidcraft_geom::Plane::from_normal(mid - d * (p0.dist(p1) * 0.5 + extension), d).ok_or_else(|| unsupported("chamfer plane"))?;
+        let points = [a, b, mid + outward * reach].map(|q| plane.to_local(q));
+        let mut profile = solidcraft_geom::Loop2::polygon(&points);
+        let mut segment = 0;
+        if profile.signed_area() < 0.0 {
+            profile = profile.reversed();
+            segment = profile.segs.len().saturating_sub(1);
+        }
+        let region = solidcraft_geom::Region2 { outer: profile, holes: vec![] };
+        let body =
+            crate::build::extrude(&plane, &[region], 0.0, p0.dist(p1) + 2.0 * extension)?.pop().ok_or_else(|| unsupported("chamfer cutter"))?;
+        let face = body.history().and_then(|h| h.faces.iter().position(|f| f.origins == [FaceOrigin::Profile { segment }]));
+        Ok(Cutter { body, face, edge: index, extension_inside: false })
+    })
 }
 
 fn chamfer_tool_sides(cur: &Body, p: Vec3, s: f64, sides: Option<(ChamferSide, bool)>, k: usize) -> Result<Cutter> {
