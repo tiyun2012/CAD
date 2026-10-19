@@ -1737,6 +1737,26 @@ mod face;
 pub use face::{end_faces, face_name_at, named_face_spot, pin_end, round_end_at};
 pub use reach::{REACH_TOL, Reach, Reached, reach};
 
+/// The rest angle that turns B least as joint `j` is made, as B sits now: none or a half turn
+/// about the joint's z. Origins whose x is chosen for them (a face, a circle, a point without
+/// x) get opposite x when their z are opposite, so two faces that already meet would, at angle
+/// 0, spin B a half turn about their shared normal.
+pub fn least_turn_angle(doc: &Document, st: &ModelState, j: &Joint) -> f64 {
+    let (Ok(fa), Ok(fb)) = (resolve_origin(doc, st, &j.a), resolve_origin(doc, st, &j.b)) else { return 0.0 };
+    let (ta, tb) = (occurrence_world(doc, j.a.occurrence), occurrence_world(doc, j.b.occurrence));
+    let mut q = j.values.clone();
+    q.resize(j.kind.dofs().len(), 0.0);
+    clamp(j, &mut q);
+    let turn = |angle: f64| {
+        let k = Joint { angle, ..j.clone() };
+        through(&k, &(fa, fb), &q, true, &ta).map(|m| mismatch(&m, &tb).1)
+    };
+    match (turn(0.0), turn(std::f64::consts::PI)) {
+        (Some(none), Some(half)) if half + 1e-9 < none => std::f64::consts::PI,
+        _ => 0.0,
+    }
+}
+
 /// The frame matrix for an explicit origin / z / x (public for commands).
 pub fn frame_of(o: Vec3, z: Vec3, x: Option<Vec3>) -> Option<Mat> {
     frame(o, z, x)

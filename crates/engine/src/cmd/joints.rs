@@ -23,7 +23,8 @@ pub static COMMANDS: &[CommandSpec] = &[
         "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball; a, b: joint origins ({occurrence, face|circle|edge|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
          values?: [angles in deg or expressions, distances]; limits?: [[min, max] | null…]; flip?: bool (default false: the origins are mated, \
          b's z against a's as two faces meet; true: b's z along a's, so two origins given at one point with the same z stay as they are); \
-         offset?: mm or an expression; angle?: deg or an expression; name?; quiet?: bool (leave out dof and fixed). An expression (text) is \
+         offset?: mm or an expression; angle?: deg or an expression (default: none, or a half turn where that turns b less, so faces that \
+         already meet stay as they are); name?; quiet?: bool (leave out dof and fixed). An expression (text) is \
          kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
          expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
@@ -629,10 +630,10 @@ fn joint(s: &mut Session, p: &Value) -> Result<Value> {
         None => 0.0,
     };
     let angle = match p.get("angle") {
-        Some(v) => value(s, v, true, cmd)?,
-        None => 0.0,
+        Some(v) => Some(value(s, v, true, cmd)?),
+        None => None,
     };
-    let j = Joint {
+    let mut j = Joint {
         id,
         name,
         kind,
@@ -642,10 +643,15 @@ fn joint(s: &mut Session, p: &Value) -> Result<Value> {
         limits: limits_param(s, p, kind, cmd)?,
         flip: bool_(p, "flip").unwrap_or(false),
         offset,
-        angle,
+        angle: angle.unwrap_or(0.0),
         suppressed: false,
         exprs: JointExprs { offset: typed(p.get("offset")), angle: typed(p.get("angle")), values: value_exprs(p) },
     };
+    // No angle given: B keeps its turn about the joint's axis where a half turn would otherwise
+    // come only from how its origin's x was chosen.
+    if angle.is_none() {
+        j.angle = joints::least_turn_angle(&s.doc, &s.model.state(), &j);
+    }
     add_joint(s, j, p)
 }
 
@@ -1418,3 +1424,6 @@ mod reach_tests;
 #[cfg(test)]
 #[path = "joints_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "joints_turn_tests.rs"]
+mod turn_tests;
