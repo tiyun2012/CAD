@@ -163,6 +163,8 @@ mod sketch_guidance_ui_tests;
 pub mod sketch_modify_ui;
 #[cfg(test)]
 mod sketch_modify_ui_tests;
+#[cfg(test)]
+mod sketch_moving_click_tests;
 pub mod sketch_palette;
 mod sketch_pattern_tree;
 #[cfg(test)]

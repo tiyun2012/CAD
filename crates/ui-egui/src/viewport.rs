@@ -40,9 +40,14 @@ pub enum NavMode {
 
 #[derive(Default)]
 pub struct ViewportState {
-    /// A two-point drawing tool's first point was placed by a press that became a drag: the
-    /// release places the second (#1630).
-    pub(crate) draw_drag: bool,
+    /// A two-point drawing tool's first point was placed by a press (here) that became a drag:
+    /// the release places the second (#1630), unless it lands within [`DRAW_DRAG_MIN`] of the
+    /// press. Such a drag was a click that moved on the way (#2448): the release places the
+    /// first point instead and the shape goes on by clicks, rather than a sliver of a shape.
+    pub(crate) draw_drag: Option<Pos2>,
+    /// A tool's click moved on the way (#2448): egui takes a press that moves past its
+    /// click distance, or is held past its click time, as a drag, so its release is the click.
+    pub(crate) tool_click: bool,
     /// Per-body boxes of one world state, held (not just its address, which a later state can
     /// reuse once the old one is freed, so stale boxes would come back).
     pick_bounds: std::sync::Mutex<Option<BodyBounds>>,
@@ -396,6 +401,10 @@ fn supersampling(app: &mut SolveApp, ctx: &egui::Context, view_proj: [[f32; 4]; 
 
 /// How long the view holds still before adaptive supersampling draws it at full quality (s).
 const SS_SETTLE: f64 = 0.25;
+
+/// How far (screen points) a press must be dragged for its release to draw a rectangle, circle
+/// or polygon (#1630); a shorter drag is a click that moved on the way (#2448).
+const DRAW_DRAG_MIN: f32 = 24.0;
 
 /// The display plan the model scene draws `b` from on the GPU, or `None` when its faces are built
 /// here from the reference mesh. Opaque shaded bodies (`opaque`: not faded, and no see-through
@@ -2439,15 +2448,34 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     crate::frame_rate::paint(app, ui.ctx(), &painter, rect);
 
     // ---- interaction ----
+    // A tool's click that moved on the way (#2448) clicks where the button is let go.
+    if app.viewport.tool_click && resp.drag_stopped() {
+        app.viewport.tool_click = false;
+        if let Some(p) = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p))
+            && app.tool.is_some()
+        {
+            crate::tools::on_hover(app, &proj, p);
+            crate::tools::on_click(app, &proj, p);
+        }
+    }
     // A two-point shape being dragged out (#1630) follows the pointer and ends where it is let go,
     // even over the shape's own dimension box, which rides along beside the pointer.
-    if app.viewport.draw_drag {
+    if let Some(from) = app.viewport.draw_drag {
         let at = ui.input(|i| i.pointer.latest_pos()).filter(|p| rect.contains(*p));
         if resp.drag_stopped() {
-            app.viewport.draw_drag = false;
+            app.viewport.draw_drag = None;
             if let Some(p) = at
                 && app.tool.as_ref().is_some_and(|t| t.pts.len() == 1)
             {
+                // Let go close to the press, it was a click that moved on the way (#2448): the
+                // first point goes where it was let go, as for the other tools, and the shape
+                // goes on by clicks.
+                if p.distance(from) < DRAW_DRAG_MIN
+                    && let Some(t) = app.tool.as_mut()
+                {
+                    t.pts.clear();
+                    crate::sketch_dims::reset(t);
+                }
                 crate::tools::on_hover(app, &proj, p);
                 crate::tools::on_click(app, &proj, p);
             }
@@ -2472,7 +2500,11 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             && let Some(a) = ui.input(|i| i.pointer.press_origin())
         {
             crate::tools::on_click(app, &proj, a);
-            app.viewport.draw_drag = app.tool.as_ref().is_some_and(|t| t.pts.len() == 1);
+            app.viewport.draw_drag = app.tool.as_ref().is_some_and(|t| t.pts.len() == 1).then_some(a);
+        } else if app.tool.is_some() && !held && primary_nav.is_none() && mode.is_none() && resp.drag_started_by(egui::PointerButton::Primary) {
+            // Any other press of a tool that turns into a drag is a click that moved on the way
+            // (#2448): its release clicks.
+            app.viewport.tool_click = true;
         }
         let reference_pick = (resp.clicked() || resp.double_clicked())
             && !held
