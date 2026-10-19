@@ -246,6 +246,22 @@ fn csv_and_json_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn json_import_resolves_forward_references() {
+    let mut session = Session::default();
+    let rows = json!([
+        {"name": "panel_width", "unit": "in", "expression": "opening_width - (panel_thickness * 2)"},
+        {"name": "opening_width", "unit": "in", "expression": "24 in"},
+        {"name": "panel_thickness", "unit": "in", "expression": "3/4 in"}
+    ]);
+
+    run(&mut session, "parameters.import", json!({"text": rows.to_string()}));
+
+    let (values, errors) = session.doc.param_values();
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(session.doc.param_display_value(&values, "panel_width"), Some(22.5));
+}
+
 /// Two triangles joined by three links (a b c, d e f; links a–d, b–e, c–f), a on the origin,
 /// a–b horizontal, every distance a dimension: the construction leaves it to the iteration.
 /// Returns the session, the sketch feature and the nine dimensions' parameters.

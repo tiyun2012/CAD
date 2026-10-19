@@ -4,7 +4,7 @@
 //! parameter can be referenced by name from any expression; the dependency graph and cycles
 //! come from the expression references.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -463,9 +463,38 @@ impl Document {
         if rows.len() > 10_000 {
             return Err(DocError::Invalid("too many parameters".into()));
         }
+        let mut row_by_name: BTreeMap<&str, usize> = BTreeMap::new();
+        for (index, (name, _, _, _)) in rows.iter().enumerate() {
+            row_by_name.insert(name, index);
+        }
+        let mut dependents = vec![Vec::new(); rows.len()];
+        let mut dependency_count = vec![0; rows.len()];
+        for (index, (_, expression, _, _)) in rows.iter().enumerate() {
+            let dependencies: BTreeSet<usize> =
+                expr::references(expression).iter().filter_map(|name| row_by_name.get(name.as_str()).copied()).collect();
+            dependency_count[index] = dependencies.len();
+            for dependency in dependencies {
+                dependents[dependency].push(index);
+            }
+        }
+        let mut ready: VecDeque<usize> = dependency_count.iter().enumerate().filter_map(|(index, count)| (*count == 0).then_some(index)).collect();
+        let mut ordered_rows = Vec::with_capacity(rows.len());
+        while let Some(index) = ready.pop_front() {
+            ordered_rows.push(rows[index].clone());
+            for dependent in &dependents[index] {
+                dependency_count[*dependent] -= 1;
+                if dependency_count[*dependent] == 0 {
+                    ready.push_back(*dependent);
+                }
+            }
+        }
+        if ordered_rows.len() != rows.len() {
+            return Err(DocError::Expr("circular parameter references in import".into()));
+        }
+
         let mut next = self.clone();
         let mut names = Vec::new();
-        for (n, e, u, c) in rows {
+        for (n, e, u, c) in ordered_rows {
             next.change_param(&n, &e, u.as_deref(), c.as_deref())?;
             names.push(n);
         }
