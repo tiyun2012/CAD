@@ -1,5 +1,5 @@
 use serde::Serialize;
-use solidcraft_geom::{Aabb3, Mesh, Vec3};
+use solidcraft_geom::{Aabb3, Mesh, MinByFinite, Vec3};
 
 use crate::Result;
 use crate::body::Body;
@@ -37,22 +37,20 @@ fn face_sums(m: &Mesh, nf: usize) -> Vec<(f64, f64, Vec3)> {
 
 /// Smallest radius of curvature along the mesh's edge polylines (straight edges ignored).
 fn min_edge_radius(m: &Mesh) -> Option<f64> {
-    let mut best: Option<f64> = None;
-    for e in &m.edges {
-        for w in e.windows(3) {
-            let (Some(&a), Some(&b), Some(&c)) = (w.first(), w.get(1), w.get(2)) else { continue };
+    m.edges
+        .iter()
+        .flat_map(|e| e.windows(3))
+        .filter_map(|w| {
+            let (Some(&a), Some(&b), Some(&c)) = (w.first(), w.get(1), w.get(2)) else { return None };
             let (ab, bc, ca) = (b - a, c - b, a - c);
             let cross = ab.cross(bc).len();
             if !(cross > 1e-12 * ab.len() * bc.len()) {
-                continue;
+                return None;
             }
-            let r = ab.len() * bc.len() * ca.len() / (2.0 * cross);
-            if r.is_finite() && r > 0.0 && best.is_none_or(|x| r < x) {
-                best = Some(r);
-            }
-        }
-    }
-    best
+            Some(ab.len() * bc.len() * ca.len() / (2.0 * cross))
+        })
+        .filter(|r| *r > 0.0)
+        .min_by_finite(|r| *r)
 }
 
 /// Measure a body from a fine tessellation (chord tolerance 5e-5 of the body size, finer for
