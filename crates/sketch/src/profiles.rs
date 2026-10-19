@@ -10,7 +10,7 @@
 use std::f64::consts::TAU;
 
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Loop2, Region2, Seg2, Vec2};
+use solidcraft_geom::{Loop2, Region2, Ring, Seg2, Vec2};
 
 use crate::model::{CurveKind, Sketch};
 use crate::shape::{Shape, intersections_within};
@@ -497,27 +497,9 @@ pub fn without_text_counters(sk: &Sketch, profiles: Vec<Profile>) -> Vec<Profile
         return profiles;
     }
     // Outer polylines and their boxes, once.
-    let polys: Vec<Vec<Vec2>> = profiles.iter().map(|p| p.region.outer.polyline(1e-3)).collect();
-    let boxes: Vec<(Vec2, Vec2)> = polys
-        .iter()
-        .map(|pl| {
-            pl.iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
-                (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)))
-            })
-        })
-        .collect();
+    let polys: Vec<Ring<Vec2>> = profiles.iter().map(|p| p.region.outer.polyline(1e-3)).collect();
+    let boxes: Vec<(Vec2, Vec2)> = polys.iter().map(|pl| pl.bounds()).collect();
     let areas: Vec<f64> = profiles.iter().map(|p| p.region.outer.signed_area().abs()).collect();
-    let inside = |pl: &[Vec2], p: Vec2| {
-        let n = pl.len();
-        let mut odd = false;
-        for i in 0..n {
-            let (Some(a), Some(b)) = (pl.get(i), pl.get((i + 1) % n)) else { continue };
-            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
-                odd = !odd;
-            }
-        }
-        odd
-    };
     let keep: Vec<bool> = (0..profiles.len())
         .map(|i| {
             if !text_only.get(i).copied().unwrap_or(false) {
@@ -531,7 +513,7 @@ pub fn without_text_counters(sk: &Sketch, profiles: Vec<Profile>) -> Vec<Profile
                         && text_only.get(j).copied().unwrap_or(false)
                         && areas.get(j).copied().unwrap_or(0.0) > ai
                         && boxes.get(j).is_some_and(|(lo, hi)| probe.x >= lo.x && probe.x <= hi.x && probe.y >= lo.y && probe.y <= hi.y)
-                        && polys.get(j).is_some_and(|pl| inside(pl, probe))
+                        && polys.get(j).is_some_and(|pl| pl.contains(probe))
                 })
                 .count();
             depth % 2 == 0
@@ -711,8 +693,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     let mut anchors: Vec<Vec2> = Vec::new();
     if shapes.len() <= 50_000 {
         let mut whole: Vec<bool> = shapes.iter().map(|(_, s)| s.is_full()).collect();
-        for i in 0..shapes.len() {
-            let Some((ci, x)) = shapes.get(i) else { continue };
+        for (i, (ci, x)) in shapes.iter().enumerate() {
             if carrier.get(i) != Some(&i) || !analytic(*ci) {
                 continue;
             }
@@ -1029,14 +1010,7 @@ fn find_profiles_bounded(sk: &Sketch, max_edges: usize) -> Vec<Profile> {
     // Nesting: parent = smallest containing loop from another component. Bounding boxes rule
     // out most pairs before the point-in-loop test.
     let areas: Vec<f64> = loops.iter().map(|(l, _, _, _)| l.signed_area().abs()).collect();
-    let boxes: Vec<(Vec2, Vec2)> = loops
-        .iter()
-        .map(|(l, _, _, _)| {
-            l.polyline(1e-3).iter().fold((Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY)), |(lo, hi), p| {
-                (Vec2::new(lo.x.min(p.x), lo.y.min(p.y)), Vec2::new(hi.x.max(p.x), hi.y.max(p.y)))
-            })
-        })
-        .collect();
+    let boxes: Vec<(Vec2, Vec2)> = loops.iter().map(|(l, _, _, _)| l.polyline(1e-3).bounds()).collect();
     let inside_box = |j: usize, p: Vec2| boxes.get(j).is_some_and(|(lo, hi)| p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y);
     let mut parent_of: Vec<Option<usize>> = vec![None; loops.len()];
     for (i, (li, _, ci, _)) in loops.iter().enumerate() {

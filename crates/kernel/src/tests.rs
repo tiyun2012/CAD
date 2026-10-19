@@ -584,7 +584,7 @@ fn tapered_extrude_swallows_a_short_tip() {
     let meet = |(p0, t0): (Vec2, Vec2), (p1, t1): (Vec2, Vec2)| p0 + t0 * ((p1 - p0).cross(t1) / t0.cross(t1));
     let (low, high, left) = (moved(pts[0], pts[1]), moved(pts[2], pts[3]), moved(pts[3], pts[0]));
     let top = [meet(left, low), meet(low, high), meet(high, left)];
-    let area = |q: &[Vec2]| 0.5 * q.iter().zip(q.iter().cycle().skip(1)).map(|(a, b)| a.cross(*b)).sum::<f64>();
+    let area = |q: &[Vec2]| solidcraft_geom::Ring::from(q.to_vec()).signed_area();
     // Halfway up, each side edge's midpoint (the two tip corners both run to the top's tip).
     let mid = [pts[0].lerp(top[0], 0.5), pts[1].lerp(top[1], 0.5), pts[2].lerp(top[1], 0.5), pts[3].lerp(top[2], 0.5)];
     let v = h / 6.0 * (area(&pts) + 4.0 * area(&mid) + area(&top));

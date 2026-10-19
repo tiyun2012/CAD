@@ -1,7 +1,7 @@
 //! Building bodies: extrude and revolve planar regions, primitives.
 
 use mt::builder;
-use solidcraft_geom::{Loop2, Plane, Region2, Seg2, Vec2, Vec3};
+use solidcraft_geom::{Loop2, Plane, Region2, Ring, Seg2, Vec2, Vec3};
 use truck_modeling as mt;
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -1507,8 +1507,7 @@ fn revolve_on_axis(plane: &Plane, numbered: &NumberedLoop, axis_origin: Vec2, d:
                         }
                     };
                     // The loop's turning (Newell) against the surface normal halfway round.
-                    let mut nw = Vec3::ZERO;
-                    let poly: Vec<Vec3> = wire
+                    let poly: Ring<Vec3> = wire
                         .edge_iter()
                         .flat_map(|ed| {
                             let c = ed.oriented_curve();
@@ -1516,11 +1515,7 @@ fn revolve_on_axis(plane: &Plane, numbered: &NumberedLoop, axis_origin: Vec2, d:
                             (0..8).map(move |j| from_p3(c.subs(t0 + (t1 - t0) * j as f64 / 8.0))).collect::<Vec<_>>()
                         })
                         .collect();
-                    for (j, p) in poly.iter().enumerate() {
-                        if let Some(q) = poly.get((j + 1) % poly.len()) {
-                            nw += p.cross(*q);
-                        }
-                    }
+                    let nw = poly.area_vector();
                     let probe = turn(&half, plane.to_world(sg.mid()));
                     let sn = surface.search_nearest_parameter(p3(probe), None, 100).map(|(u, v)| surface.normal(u, v));
                     if sn.is_some_and(|m| nw.dot(Vec3::new(m.x, m.y, m.z)) < 0.0) {

@@ -24,7 +24,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::{Aabb3, UnitVec3, Vec3};
+use solidcraft_geom::{Aabb3, Ring, UnitVec3, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::shell_groups::boxes_separate;
@@ -1389,7 +1389,7 @@ fn inset_into(outer: &Body, inner: &Body, outer_operand: usize) -> Option<Result
     let tol = (size * 1e-7).max(1e-9) * 10.0;
     // Clear of the outer face's edges by more than the samples' chord error.
     let clear = (size * 2e-3).max(1e-6);
-    let sample = |w: &mt::Wire| -> Option<Vec<Vec3>> {
+    let sample = |w: &mt::Wire| -> Option<Ring<Vec3>> {
         if w.len() > 1000 {
             return None;
         }
@@ -1399,7 +1399,7 @@ fn inset_into(outer: &Body, inner: &Body, outer_operand: usize) -> Option<Result
             let (t0, t1) = c.range_tuple();
             pts.extend((0..SAMPLES).map(|k| from_p3(c.subs(t0 + (t1 - t0) * k as f64 / SAMPLES as f64))));
         }
-        (!pts.is_empty() && pts.iter().all(|p| p.is_finite())).then_some(pts)
+        (!pts.is_empty() && pts.iter().all(|p| p.is_finite())).then(|| Ring::new(pts))
     };
     let fo: Vec<&mt::Face> = outer.solid.face_iter().collect();
     let fi: Vec<&mt::Face> = inner.solid.face_iter().collect();
@@ -1416,7 +1416,7 @@ fn inset_into(outer: &Body, inner: &Body, outer_operand: usize) -> Option<Result
             let (Some(inner_pts), Some(outer_loops)) = (sample(&outline), face_o.boundaries().iter().map(sample).collect::<Option<Vec<_>>>()) else {
                 continue;
             };
-            let outer_count: usize = outer_loops.iter().map(Vec::len).sum();
+            let outer_count: usize = outer_loops.iter().map(|l| l.len()).sum();
             if inner_pts.len().saturating_mul(outer_count) > MAX_WORK {
                 continue;
             }
@@ -1429,8 +1429,7 @@ fn inset_into(outer: &Body, inner: &Body, outer_operand: usize) -> Option<Result
             let outer_polys: Vec<_> = outer_loops.iter().map(|l| flat(l)).collect();
             let inner_poly = flat(&inner_pts);
             let in_outer = |p: Vec3| outer_polys.iter().filter(|l| l.contains(flat_point(p))).count() % 2 == 1;
-            let near_outer =
-                |p: Vec3| outer_loops.iter().any(|l| l.iter().zip(l.iter().cycle().skip(1)).any(|(s, t)| p.dist_to_segment(*s, *t) < clear));
+            let near_outer = |p: Vec3| outer_loops.iter().any(|l| l.edges().any(|(s, t)| p.dist_to_segment(*s, *t) < clear));
             let fits = inner_pts.iter().all(|p| in_outer(*p) && !near_outer(*p))
                 && outer_loops.iter().flatten().all(|p| !inner_poly.contains(flat_point(*p)));
             if !fits {
