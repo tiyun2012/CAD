@@ -28,6 +28,8 @@ mod boundary;
 mod boundary_network;
 mod bridge;
 mod build;
+#[cfg(test)]
+mod cache_tests;
 mod clearance;
 mod coaxial_overlap;
 mod continuity;
@@ -82,6 +84,7 @@ pub mod loft_blend;
 mod loopblend;
 mod matchsurf;
 mod measure;
+mod memo;
 mod mesh_convert;
 mod meshbody;
 #[cfg(test)]

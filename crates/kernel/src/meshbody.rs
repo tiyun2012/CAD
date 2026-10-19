@@ -104,7 +104,7 @@ pub fn mesh_body(positions: &[Vec3], triangles: &[[u32; 3]]) -> Result<Body> {
     Ok(Body {
         solid: Arc::new(crate::body::Solid::new_unchecked(Vec::new())),
         size: 0.0,
-        volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
+        cache: Some(std::sync::Arc::default()),
         coarse_missing: None,
         mesh: Some(Arc::new(out)),
         color: None,
@@ -201,7 +201,7 @@ impl Body {
         Some(Body {
             solid: self.solid.clone(),
             size: 0.0,
-            volume: Some(std::sync::Arc::new(std::sync::Mutex::new(None))),
+            cache: Some(std::sync::Arc::default()),
             coarse_missing: None,
             mesh: Some(Arc::new(out)),
             color: self.color,
