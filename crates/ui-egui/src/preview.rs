@@ -15,7 +15,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use serde_json::Value;
 use solidcraft_engine::Session;
 use solidcraft_engine::doc::ModelState;
-use solidcraft_engine::geom::{Aabb3, Mesh, Vec3};
+use solidcraft_engine::geom::{Aabb3, Mesh, Ring, Vec3};
 
 use crate::SolveApp;
 use crate::gpu::{GpuScene, SceneSlot};
@@ -547,7 +547,7 @@ pub fn build(before: &ModelState, after: &ModelState, c: Colors) -> Built {
                     sc.xray_tri(p.to_f32(), plane.normal().to_f32(), color);
                 }
             }
-            for (a, b) in quad.iter().zip(quad.iter().cycle().skip(1)).take(4) {
+            for (a, b) in Ring::from(quad).edges() {
                 sc.line(a.to_f32(), b.to_f32(), c.added, 1.3, true);
             }
         }

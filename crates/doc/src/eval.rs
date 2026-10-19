@@ -1864,12 +1864,7 @@ pub fn through_all_distance(st: &ModelState, plane: &Plane, targets: &[String]) 
 /// Sample points inside a region (sketch coordinates).
 fn region_samples(r: &Region2) -> Vec<Vec2> {
     let mut out = vec![r.interior_point()];
-    let pts = r.outer.polyline(1e-2);
-    let (mut lo, mut hi) = (Vec2::new(f64::INFINITY, f64::INFINITY), Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY));
-    for p in &pts {
-        lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
-        hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
-    }
+    let solidcraft_geom::Aabb2 { min: lo, max: hi } = r.outer.polyline(1e-2).bounds();
     for i in 0..5 {
         for j in 0..5 {
             let p = Vec2::new(lo.x + (hi.x - lo.x) * (0.1 + 0.2 * i as f64), lo.y + (hi.y - lo.y) * (0.1 + 0.2 * j as f64));

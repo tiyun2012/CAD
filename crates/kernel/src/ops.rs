@@ -315,7 +315,7 @@ fn contradicted(
     }
     if disjoint {
         let (ba, bb) = (ma.bounds(), mb.bounds());
-        let shared = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) };
+        let shared = ba.intersection(&bb);
         return !shared.is_empty() && (under_surface(ma, ia, ib, tol, true, Some(&shared)) || under_surface(mb, ib, ia, tol, true, Some(&shared)));
     }
     (a_in_b && under_surface(ma, ia, ib, tol, false, None)) || (b_in_a && !a_in_b && under_surface(mb, ib, ia, tol, false, None))
@@ -781,7 +781,7 @@ fn meeting_size(a: &Body, b: &Body) -> f64 {
         bb
     };
     let (ba, bb) = (bbox(a), bbox(b));
-    let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+    let s = ba.intersection(&bb).size();
     // A closed sweep's section seams need not span its geometry. Roundoff in a flat
     // vertex box is not a thin meeting region: refining for it
     // makes millions of triangles and skips the bounded containment shortcut (#2005).
@@ -794,7 +794,7 @@ fn meeting_size(a: &Body, b: &Body) -> f64 {
 /// on its seam, so its vertex box says nothing about where its side reaches.
 fn mesh_meeting_size(a: &solidcraft_geom::Mesh, b: &solidcraft_geom::Mesh) -> f64 {
     let (ba, bb) = (a.bounds(), b.bounds());
-    let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+    let s = ba.intersection(&bb).size();
     if s.x > 0.0 && s.y > 0.0 && s.z > 0.0 { s.x.min(s.y).min(s.z) } else { f64::INFINITY }
 }
 
@@ -1113,7 +1113,7 @@ fn boolean_whole_with_refinement(a: &Body, b: &Body, op: BoolOp, refine: bool) -
     let fine_tols: Vec<f64> = match &meshes {
         (Some(ma), Some(mb)) if a.solid.boundaries().len() == 1 && b.solid.boundaries().len() == 1 => {
             let (ba, bb) = (ma.bounds(), mb.bounds());
-            let s = solidcraft_geom::Aabb3 { min: ba.min.max(bb.min), max: ba.max.min(bb.max) }.size();
+            let s = ba.intersection(&bb).size();
             // The thinner operand's thickness (twice its volume over its area: a plate's
             // thickness, a rod's radius) bounds what the tolerance must resolve as well.
             let thickness = |m: &solidcraft_geom::Mesh| {
@@ -1610,8 +1610,7 @@ fn union_apart_untimed(bodies: &[Body]) -> Result<Option<Body>> {
         if bb.is_empty() {
             return Ok(None);
         }
-        let pad = Vec3::new(1.0, 1.0, 1.0) * (2.0 * tol);
-        boxes.push(solidcraft_geom::Aabb3 { min: bb.min - pad, max: bb.max + pad });
+        boxes.push(bb.inflated(2.0 * tol));
     }
     // Sweep along x: only boxes whose x ranges overlap are compared.
     let mut order: Vec<usize> = (0..boxes.len()).collect();

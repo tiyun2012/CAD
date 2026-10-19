@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Aabb3, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -1283,7 +1283,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
     // edge, the refusal). A blend only changes the body near the edges it rounds, so an edge
     // refused away from every later blend would be refused the same way again: it is not tried
     // again (a refusal costs a rolling-ball attempt, seconds each on a long curved edge).
-    let mut refused: Vec<(Vec3, (Vec3, Vec3), KernelError)> = Vec::new();
+    let mut refused: Vec<(Vec3, Aabb3, KernelError)> = Vec::new();
     // A chain runs on along the edges smooth with a selected one in the body as given, not along
     // a round this blend has made meanwhile (which would take in edges nobody selected, or not,
     // by the order the edges come in).
@@ -1321,13 +1321,13 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
             && let Ok(b) = guard(what, || Ok(res)).and_then(|res| record::rebuilt(res, &[&solid], &rec))
         {
             let near = edges_box(&solid, &ids, r + tol);
-            refused.retain(|(_, b, _)| !boxes_meet(*b, near));
+            refused.retain(|(_, b, _)| !boxes_meet(b, &near));
             cur = record::after(b, &cur, &counts);
             todo.retain(|p| !covered.iter().any(|q| q.dist(*p) < 1e-12));
             continue;
         }
         let mut first_err: Option<KernelError> = None;
-        let mut done: Option<(Body, Vec<usize>, (Vec3, Vec3))> = None;
+        let mut done: Option<(Body, Vec<usize>, Aabb3)> = None;
         for (j, p) in todo.iter().enumerate() {
             if let Some((_, _, e)) = refused.iter().find(|(q, _, _)| q.dist(*p) < 1e-12) {
                 if first_err.is_none() || (matches!(e, KernelError::TooLarge(_)) && !matches!(first_err, Some(KernelError::TooLarge(_)))) {
@@ -1443,7 +1443,7 @@ fn blend_each(mut cur: Body, edges: &[Vec3], r: f64, shape: Shape, what: &str, c
         }
         match done {
             Some((b, js, near)) => {
-                refused.retain(|(_, b2, _)| !boxes_meet(*b2, near));
+                refused.retain(|(_, b2, _)| !boxes_meet(b2, &near));
                 cur = record::after(b, &cur, &counts);
                 let mut k = 0;
                 todo.retain(|_| {
@@ -1465,27 +1465,19 @@ thread_local! {
 }
 
 /// The box around these edges of `solid` (their ends and middles), grown by `margin`.
-fn edges_box(solid: &Solid, ids: &[mt::EdgeID], margin: f64) -> (Vec3, Vec3) {
+fn edges_box(solid: &Solid, ids: &[mt::EdgeID], margin: f64) -> Aabb3 {
     use mt::{BoundedCurve, ParametricCurve};
-    let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-    let mut hi = -lo;
-    for e in Body::unique_edges(solid).iter().filter(|e| ids.contains(&e.id())) {
+    let points = Body::unique_edges(solid).into_iter().filter(|e| ids.contains(&e.id())).flat_map(|e| {
         let c = e.curve();
         let (t0, t1) = c.range_tuple();
-        for k in 0..=8 {
-            let q = from_p3(c.subs(t0 + (t1 - t0) * f64::from(k) / 8.0));
-            lo = lo.min(q);
-            hi = hi.max(q);
-        }
-    }
-    let m = Vec3::new(margin, margin, margin);
-    (lo - m, hi + m)
+        (0..=8).map(move |k| from_p3(c.subs(t0 + (t1 - t0) * f64::from(k) / 8.0)))
+    });
+    points.collect::<Aabb3>().inflated(margin)
 }
 
 /// Whether two boxes overlap (an empty box meets every box: nothing is known about it).
-fn boxes_meet(a: (Vec3, Vec3), b: (Vec3, Vec3)) -> bool {
-    let empty = |x: (Vec3, Vec3)| !(x.0.x <= x.1.x && x.0.y <= x.1.y && x.0.z <= x.1.z);
-    empty(a) || empty(b) || (a.0.x <= b.1.x && b.0.x <= a.1.x && a.0.y <= b.1.y && b.0.y <= a.1.y && a.0.z <= b.1.z && b.0.z <= a.1.z)
+fn boxes_meet(a: &Aabb3, b: &Aabb3) -> bool {
+    a.is_empty() || b.is_empty() || a.meets(b)
 }
 
 /// Neighbouring edges along one boundary loop of a planar face that between them hold at least

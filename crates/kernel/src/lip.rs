@@ -3,7 +3,7 @@
 //! directly from the body's faces (the band's walls continue the walls below, which a boolean
 //! union can't join: their faces would coincide).
 
-use solidcraft_geom::Vec3;
+use solidcraft_geom::{Ring, Vec3};
 use truck_modeling::{self as mt, builder};
 
 use crate::body::{Body, Solid, from_p3, p3, v3};
@@ -140,16 +140,7 @@ pub fn raise_band(body: &Body, at: Vec3, width: f64, height: f64, outside: bool)
         return Err(fail("the face must have an outer and one inner loop (a rim)"));
     }
     // Outer loop: turning positively about n.
-    let turn = |w: &mt::Wire| -> f64 {
-        let pts: Vec<Vec3> = w.vertex_iter().map(|v| from_p3(v.point())).collect();
-        let mut s = Vec3::ZERO;
-        for (k, p) in pts.iter().enumerate() {
-            if let Some(q) = pts.get((k + 1) % pts.len()) {
-                s += p.cross(*q);
-            }
-        }
-        s.dot(n)
-    };
+    let turn = |w: &mt::Wire| -> f64 { w.vertex_iter().map(|v| from_p3(v.point())).collect::<Ring<Vec3>>().area_vector().dot(n) };
     let (w0, w1) = (wires.first().ok_or_else(|| fail("loop"))?, wires.get(1).ok_or_else(|| fail("loop"))?);
     let (outer, inner) = if turn(w0) >= turn(w1) { (w0, w1) } else { (w1, w0) };
     let (along, other) = if outside { (outer, inner) } else { (inner, outer) };

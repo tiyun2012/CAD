@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use solidcraft_geom::{Seg2, Vec2, Vec3};
+use solidcraft_geom::{Aabb2, Seg2, Vec2, Vec3};
 
 use crate::union_find::{find, union};
 
@@ -1544,18 +1544,7 @@ impl Sketch {
 
     /// Axis-aligned bounds of all geometry (for views).
     pub fn bounds(&self) -> Option<(Vec2, Vec2)> {
-        let mut lo = Vec2::new(f64::INFINITY, f64::INFINITY);
-        let mut hi = Vec2::new(f64::NEG_INFINITY, f64::NEG_INFINITY);
-        let mut any = false;
-        for i in 0..self.curves.len() {
-            for s in self.segs(i) {
-                for p in s.polyline(0.5) {
-                    lo = Vec2::new(lo.x.min(p.x), lo.y.min(p.y));
-                    hi = Vec2::new(hi.x.max(p.x), hi.y.max(p.y));
-                    any = true;
-                }
-            }
-        }
-        any.then_some((lo, hi))
+        let b: Aabb2 = (0..self.curves.len()).flat_map(|i| self.segs(i)).flat_map(|s| s.polyline(0.5)).collect();
+        (!b.is_empty()).then_some((b.min, b.max))
     }
 }

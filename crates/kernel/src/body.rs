@@ -1,5 +1,5 @@
 use serde::Serialize;
-use solidcraft_geom::{Mesh, Vec3};
+use solidcraft_geom::{Aabb3, Mesh, Vec3};
 use truck_meshalgo::prelude::*;
 use truck_modeling as mt;
 
@@ -501,14 +501,8 @@ fn orientation_tolerance(span: f64) -> f64 {
 
 /// Bounding-box diagonal of a solid's vertices (1 when it has no finite extent).
 fn span_of(solid: &Solid) -> f64 {
-    let mut lo = Vec3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
-    let mut hi = -lo;
-    for v in solid.vertex_iter() {
-        let p = from_p3(v.point());
-        lo = Vec3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
-        hi = Vec3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
-    }
-    if lo.x.is_finite() { (hi - lo).len() } else { 1.0 }
+    let bounds: Aabb3 = solid.vertex_iter().map(|v| from_p3(v.point())).collect();
+    if bounds.is_empty() { 1.0 } else { bounds.diagonal() }
 }
 
 /// Equal shared values: the same allocation (a clone of the body), else equal contents.
