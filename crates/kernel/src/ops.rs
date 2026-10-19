@@ -1686,7 +1686,7 @@ fn det3(m: &[[f64; 4]; 4]) -> f64 {
 }
 
 /// Whether the linear part is a rigid motion (rotation or reflection: no scale or shear).
-fn rigid_placement(m: &[[f64; 4]; 4]) -> bool {
+pub(crate) fn rigid_placement(m: &[[f64; 4]; 4]) -> bool {
     let r = [Vec3::new(m[0][0], m[0][1], m[0][2]), Vec3::new(m[1][0], m[1][1], m[1][2]), Vec3::new(m[2][0], m[2][1], m[2][2])];
     (0..3).all(|i| (r[i].dot(r[i]) - 1.0).abs() < 1e-9) && r[0].dot(r[1]).abs() < 1e-9 && r[0].dot(r[2]).abs() < 1e-9 && r[1].dot(r[2]).abs() < 1e-9
 }
