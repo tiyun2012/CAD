@@ -373,9 +373,24 @@ pub fn items(app: &SolveApp, target: &Target) -> Vec<Item> {
     v
 }
 
-/// The feature a body was made by, and that feature's sketch if it has one.
-fn body_feature_and_sketch(app: &SolveApp, body: &str) -> (Option<u64>, Option<u64>) {
-    let f = body_feature(app, body);
+/// Resolve the picked face's creator, rather than the feature that first made its body.
+/// Persistent face names retain their creator through later trims and placements.
+fn picked_face_feature(app: &SolveApp) -> Option<u64> {
+    let (body, index) = app.session.selection.iter().find_map(|s| match s {
+        Sel::Face { body, index, .. } => Some((body, *index)),
+        _ => None,
+    })?;
+    let state = app.session.world_state();
+    let body = state.body(body)?;
+    let names = solidcraft_engine::doc::naming::face_names(body);
+    let name = names.get(index)?;
+    let (creator, _) = name.strip_prefix('F')?.split_once(':')?;
+    let id = creator.parse::<u64>().ok()?;
+    app.session.doc.feature(id).map(|f| f.id)
+}
+
+/// A feature and its profile sketch, if it has one.
+fn feature_and_sketch(app: &SolveApp, f: Option<u64>) -> (Option<u64>, Option<u64>) {
     let sketch = f
         .and_then(|f| app.session.doc.feature(f))
         .and_then(|f| serde_json::to_value(&f.kind).ok())
@@ -421,7 +436,7 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         v.extend(sketch_items(app, sketch));
     } else if has(|s| matches!(s, Sel::Face { .. })) {
         let face = sel.iter().find_map(|s| if let Sel::Face { body, .. } = s { Some(body.clone()) } else { None }).unwrap_or_default();
-        let (feature, sketch) = body_feature_and_sketch(app, &face);
+        let (feature, sketch) = feature_and_sketch(app, picked_face_feature(app));
         let hidden = app.session.visibility.hidden_bodies.contains(&face);
         v.push(cmd(app, "sketch.create", "Create Sketch"));
         v.push(cmd(app, "solid.extrude", "Extrude"));
@@ -438,7 +453,7 @@ fn viewport_items(app: &SolveApp) -> Vec<Item> {
         v.push(act(if hidden { "ui.show" } else { "ui.hide" }, "Show/Hide", "eye").key("V").with(json!({ "bodies": [face] })));
         v.push(Item::sep());
         v.push(act("ui.findBrowser", "Find in Browser", "").with(json!({ "body": face })));
-        v.push(act("ui.findTimeline", "Find in Timeline", "").with(json!({ "body": face })));
+        v.push(act("ui.findTimeline", "Find in Timeline", "").with(json!({ "feature": feature })).on(feature.is_some()));
         v.push(Item::sep());
         v.push(cmd(app, "solid.press_pull", "Press Pull"));
         v.push(cmd(app, "inspect.measure", "Measure"));
