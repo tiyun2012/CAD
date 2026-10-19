@@ -197,6 +197,9 @@ rebuild with no errors, replayed here at 2× speed.
   and an optional reviewed screenshot; opening GitHub does not submit the report.
 - **Headless CLI** `solidcraft-cli`: run command scripts, measure (volume, area, centre of mass,
   face/edge/vertex counts), export, render PNG snapshots and replay reference recipes.
+  A snapshot can draw a body see-through and another solid in a colour of its own, and cut
+  the model at a plane, so a picture shows the body a cut would remove inside the material
+  it meets.
 - **MCP server** `solidcraft-cli mcp`: AI agents model, measure and look at parts headless or
   in the running app (see below).
 
@@ -207,6 +210,7 @@ cargo run --release -p solidcraft -- --sample          # desktop app with a samp
 cargo run --release -p solidcraft-cli -- commands      # the command registry
 cargo run --release -p solidcraft-cli -- run examples/bracket.json --out bracket.step
 cargo run --release -p solidcraft-cli -- snapshot examples/bracket.json --out bracket.png
+cargo run --release -p solidcraft-cli -- snapshot part.solidcraft --out preview.png --tool Pin --section z=12
 cargo run --release -p solidcraft-cli -- render examples/render-studio.json --out product.png
 cargo run --release -p solidcraft -- part.step          # open a STEP file as a new design
 cargo run --release -p solidcraft-cli -- eval part.step # measure an imported STEP file
