@@ -262,6 +262,9 @@ pub struct Prefs {
     pub default_units: String,
     /// Mouse mapping: `fusion`, `solidworks` or `inventor`.
     pub nav: String,
+    /// Opt in to rotation through both poles with roll, without the Shift axis-snap spring.
+    /// Independent of mouse bindings; false also preserves existing saved presets' behavior.
+    pub free_orbit: bool,
     /// View orientation widget: original signed axes (default) or compact cube.
     pub navigator_style: NavigatorStyle,
     /// Show the radial ring and enable hold/flick gestures for viewport context menus.
@@ -426,6 +429,7 @@ impl Default for Prefs {
         Prefs {
             default_units: "mm".into(),
             nav: "fusion".into(),
+            free_orbit: false,
             navigator_style: NavigatorStyle::default(),
             radial_context_menu: false,
             zoom_reverse: false,
@@ -736,6 +740,7 @@ fn defaults(app: &mut SolveApp, page: usize) {
         }
         1 => {
             p.nav = d.nav;
+            p.free_orbit = d.free_orbit;
             p.navigator_style = d.navigator_style;
             p.radial_context_menu = d.radial_context_menu;
             p.zoom_reverse = d.zoom_reverse;
@@ -1261,9 +1266,17 @@ fn page(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
             if app.preferences.nav == TOUCHPAD_NAV {
                 note(ui, crate::i18n::tr("nav.touchpad.help"));
             } else {
-                let snap_help = if app.preferences.nav == OPENSCAD_NAV { "" } else { "; hold Shift during orbit to snap" };
+                let snap_help = if app.preferences.free_orbit || app.preferences.nav == OPENSCAD_NAV { "" } else { "; hold Shift during orbit to snap" };
                 let raw_help = format!("{}; Ctrl+left drag on empty space orbits{snap_help}; hold Space to pan; the wheel zooms", nav_preset(&app.preferences.nav).help);
                 note(ui, crate::i18n::tr_label(&raw_help));
+            }
+            ui.label(crate::i18n::tr("nav.free_orbit.label"));
+            let free_orbit = ui.checkbox(&mut app.preferences.free_orbit, "");
+            crate::scenario::publish_rect("prefs:free_orbit", free_orbit.rect);
+            crate::scenario::publish_handle("prefs:free_orbit", free_orbit.rect.center());
+            ui.end_row();
+            if app.preferences.free_orbit {
+                note(ui, crate::i18n::tr("nav.free_orbit.help"));
             }
             ui.label(crate::i18n::tr_label("Context menu"));
             ui.checkbox(&mut app.preferences.radial_context_menu, crate::i18n::tr_label("Radial context menu"));
@@ -2078,6 +2091,26 @@ mod tests {
         h.call("ui.click", json!({"x":axis.x,"y":axis.y}));
         assert!(h.app.cam.back().dist(Vec3::Y) < 1e-6, "original axes retain click-again reversal");
         assert_eq!(h.app.session.doc.to_json(), design);
+    }
+
+    #[test]
+    fn free_orbit_defaults_off_and_follows_preferences_transactions() {
+        let old: Prefs = serde_json::from_value(json!({"nav":"solidworks"})).unwrap();
+        assert!(!old.free_orbit);
+        let mut h = crate::scenario::Harness::new();
+        h.call("ui.prefs", json!({"open":"Navigation"}));
+        h.step(&json!({"click":{"handle":"prefs:free_orbit"}})).unwrap();
+        assert!(h.app.preferences.free_orbit);
+        let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
+        restored.load_prefs(&h.app.prefs());
+        assert!(restored.preferences.free_orbit);
+        h.call("ui.prefs", json!({"button":"cancel"}));
+        assert!(!h.app.preferences.free_orbit);
+        h.call("ui.prefs", json!({"open":"Navigation","free_orbit":true,"button":"apply"}));
+        h.call("ui.prefs", json!({"button":"defaults"}));
+        assert!(!h.app.preferences.free_orbit);
+        h.call("ui.prefs", json!({"button":"cancel"}));
+        assert!(h.app.preferences.free_orbit);
     }
 
     #[test]

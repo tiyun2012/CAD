@@ -228,6 +228,11 @@ invert switch and a speed for the 3D mouse. The web app reads
 it too, through the browser; Firefox needs a 3DxWare setting first (see
 [Getting started › 3D mouse in the browser](docs/book/src/guide/getting-started.md#3d-mouse-in-the-browser)).
 
+Enable **Preferences → Navigation → Free orbit** to rotate the mouse and 3D mouse continuously
+through both poles, preserving roll without axis snapping. It defaults to off for every mouse
+preset. With SolidWorks navigation, right-click a planar face and choose **Normal to Selection**
+to use Look At (also Ctrl+8); repeat to flip the side, preserving scale and projection.
+
 With 3DxWare on Windows, SolidCraft follows 3DxWare's profile for it when there is one, and
 3DxWare's object mode (tilt to roll, twist to spin) until there is. The mouse-wheel turns that
 3DxWare makes from the cap's motion are ignored, so the view doesn't zoom in steps as the cap tilts.
