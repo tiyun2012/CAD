@@ -91,3 +91,38 @@ fn edit_opens_the_section_dialog() {
     menu(&mut h, "Edit Section Analysis");
     assert!(h.app.dialog.is_some(), "the Section Analysis dialog opens");
 }
+
+/// Press a dialog button and give the dialog the frames it takes to close.
+fn press(h: &mut Harness, button: &str) {
+    h.frames(2);
+    h.step(&json!({"widget": button})).unwrap();
+    for _ in 0..200 {
+        if h.app.dialog.is_none() {
+            break;
+        }
+        h.frames(1);
+    }
+    assert!(h.app.dialog.is_none(), "{button}: {:?}", h.app.dialog.as_ref().map(|d| &d.error));
+}
+
+/// The Section Analysis dialog turns the section off: OK with no plane picked removes it, while
+/// Cancel leaves it as it was.
+#[test]
+fn ok_with_no_plane_picked_turns_the_section_off() {
+    let mut h = harness();
+    h.app.run("solid.box", json!({"length": 40, "width": 30, "height": 20})).unwrap();
+    h.app.run("inspect.section", json!({"plane": "XZ", "offset": 15})).unwrap();
+    h.app.session.selection.clear();
+    h.frames(3);
+    h.app.start("inspect.section");
+    h.frames(2);
+    assert!(h.app.dialog.as_ref().is_some_and(|d| d.inputs.first().is_some_and(|i| i.items.is_empty())), "no plane picked");
+    press(&mut h, "Cancel");
+    assert!(h.app.session.section.is_some(), "Cancel keeps the section");
+
+    h.app.start("inspect.section");
+    press(&mut h, "OK");
+    assert_eq!(h.app.session.section, None, "OK with no plane turns the section off");
+    h.frames(3);
+    assert!(crate::scenario::handle_at("row:Section Analysis").is_none(), "the browser no longer lists it");
+}

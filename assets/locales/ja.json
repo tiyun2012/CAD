@@ -794,6 +794,7 @@
   "sample.plate.name": "サンプル プレート",
   "sample.vents.about": "矩形パターンに並んだスロット: 行数、列数、ピッチはパラメータ",
   "sample.vents.name": "通気プレート",
+  "section.off_hint": "平面が選択されていません。OK を押すとセクションを解除します。",
   "settings.display_quality_note": "細かいほど曲面とエッジが滑らかに表示されますが、メッシュの生成に時間がかかります。変わるのはビューポートだけで、設計やエクスポートは変わりません。",
   "settings.frame_rate_note": "ビューの右下に 1 秒あたりのフレーム数を表示します。オンの間、ビューは常に再描画されます。",
   "settings.measure_axis_distances": "計測のX・Y・Z距離を表示",

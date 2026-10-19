@@ -2863,6 +2863,11 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
                         row_label(ui, "Flip");
                         ui.checkbox(flip, "");
                         ui.end_row();
+                        if app.session.section.is_some() && d.inputs.first().is_some_and(|i| i.items.is_empty()) {
+                            row_label(ui, "");
+                            ui.small(tr("section.off_hint"));
+                            ui.end_row();
+                        }
                     }
                     Kind::PatternRect { count, spacing, count2, spacing2 } => {
                         for (l, v) in [("Quantity", count), ("Spacing", spacing), ("Quantity 2", count2), ("Spacing 2", spacing2)] {
@@ -4188,6 +4193,10 @@ fn dialog_commands(app: &SolveApp, d: &Dialog) -> Result<Vec<(String, Value)>, S
             ("material.assign", json!({"bodies": body_names(0), "material": name}))
         }
         Kind::Section { offset, flip } => {
+            // No plane: OK turns the section off.
+            if sels(d, 0).is_empty() {
+                return Ok(vec![("inspect.section".into(), json!({"clear": true}))]);
+            }
             need(0, "a plane or planar face")?;
             let plane = match sels(d, 0).first() {
                 Some(Sel::Plane { name }) if matches!(name.as_str(), "XY" | "XZ" | "YZ") => json!(name),
