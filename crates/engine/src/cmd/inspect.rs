@@ -256,7 +256,11 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     let sketches: Vec<Value> = st
         .sketches
         .iter()
-        .map(|ss| json!({"id": ss.feature, "name": ss.name, "dof": ss.report.dof, "status": ss.report.status, "curves": ss.sketch.curves.len(), "profiles": ss.profiles.len(), "visible": crate::view::sketch_shown(s, ss.feature)}))
+        .map(|ss| {
+            json!({"id": ss.feature, "name": ss.name, "dof": ss.report.dof, "status": ss.report.status, "plane": ss.plane,
+                   "points": ss.sketch.points.len(), "curves": ss.sketch.curves.len(), "constraints": ss.sketch.constraints.len(),
+                   "profiles": ss.profiles.len(), "visible": crate::view::sketch_shown(s, ss.feature)})
+        })
         .collect();
     Ok(json!({
         "name": s.doc.name, "units": s.doc.units, "metadata": s.doc.metadata, "path": s.path, "dirty": s.is_dirty(), "revision": s.revision,

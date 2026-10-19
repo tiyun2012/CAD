@@ -133,7 +133,7 @@ After `set_parameter L=120` the volume is 35335.2 mm³, and the holes stay in th
 |---|---|
 | `list_commands {}` | **Over 100 KB.** Never call it unfiltered; filter on a distinctive word such as `"hole"` or `"slot"`. |
 | `body_topology` | 25-45 KB |
-| `inspect_design {}` | 12 KB, and it grows with the sketches |
+| `inspect_design {}` | 12 KB; sketches are summaries (counts, DOF, plane) unless named in `sketches` |
 | `inspect_design {"measure":false,"sketches":false}` | 4 KB: parameters, timeline errors, bodies |
 | `sketch.inspect` | 5 KB per small sketch |
 | `parameters.list {"filter":"feature"}` | 3 KB |

@@ -10,6 +10,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use solidcraft_engine::MAX_LINE;
 use solidcraft_engine::control_auth;
+use solidcraft_engine::control_pending;
 use solidcraft_ui_egui::ControlRequest;
 
 /// Connections served at once, so a flood must not be able to spawn threads without end.
@@ -175,7 +176,32 @@ const WAITS: Waits = Waits { short: Duration::from_secs(60), long: Duration::fro
 struct Pending {
     id: Value,
     method: String,
+    /// The request in messages ("`engine.execute` (solid.fillet)").
+    what: String,
     reply: Receiver<Value>,
+}
+
+/// The reply text for a request that outlasts its wait. A request that only reads changes
+/// nothing when it finishes; any other still applies, as it was not cancelled.
+fn timeout_message(what: &str, reads_only: bool) -> String {
+    if reads_only {
+        format!("timeout: {what} is still running in the app (it only reads: nothing changes); ask `control.pending` for its answer")
+    } else {
+        format!(
+            "timeout: {what} is still running in the app and will still apply when it finishes (it was not cancelled: don't send it \
+             again); ask `control.pending` for its result"
+        )
+    }
+}
+
+/// The reply text for a request refused because an earlier one on the connection still runs.
+fn busy_message(p: &Pending, method: &str) -> String {
+    let method: String = method.chars().take(128).collect();
+    format!(
+        "busy: request {} ({}) is still running, so `{method}` was not run; ask `control.pending` for that request's result, then \
+         send this one again",
+        p.id, p.what
+    )
 }
 
 fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::Context, patient: bool) {
@@ -234,7 +260,7 @@ fn serve_with(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: e
                     }
                 } else if let Some(p) = pending.as_ref().filter(|_| late.is_none()) {
                     // Nothing more is queued behind it, to run unseen when it ends.
-                    json!({"ok": false, "busy": true, "error": format!("busy: request {} (`{}`) is still running; ask `control.pending` for its result", p.id, p.method)})
+                    json!({"ok": false, "busy": true, "error": busy_message(p, &method)})
                 } else {
                     if late.is_some() {
                         // Finished, and the client moved on without asking: it is dropped.
@@ -242,6 +268,8 @@ fn serve_with(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: e
                     }
                     // A batch replaces many short requests: the whole of it may take long (#743).
                     let wait = if patient || method == "engine.batch" { waits.long } else { waits.short };
+                    let what = control_pending::describe(&method, &params);
+                    let reads = control_pending::reads_only(&method, &params);
                     let (req, rrx) = ControlRequest::new(method.clone(), params);
                     if tx.send(req).is_err() {
                         break;
@@ -250,8 +278,8 @@ fn serve_with(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: e
                     match rrx.recv_timeout(wait) {
                         Ok(r) => r,
                         Err(_) => {
-                            let r = json!({"ok": false, "running": true, "error": format!("timeout: `{method}` is still running in the app and will still apply; ask `control.pending` for its result")});
-                            pending = Some(Pending { id: id.clone(), method, reply: rrx });
+                            let r = json!({"ok": false, "running": true, "error": timeout_message(&what, reads)});
+                            pending = Some(Pending { id: id.clone(), method, what, reply: rrx });
                             r
                         }
                     }
@@ -347,6 +375,18 @@ mod tests {
         let r = ask(json!({"id": 6, "method": "ui.view"}));
         assert_eq!((&r["ok"], &r["result"]), (&json!(true), &json!("ui.view")), "{r}");
         assert_eq!(*ran.lock().unwrap(), ["slow", "ui.view"], "the busy request never reached the app");
+    }
+
+    /// A timed-out request that only reads is not said to "still apply"; a change is, by name.
+    #[test]
+    fn timeout_text_tells_reads_from_changes() {
+        let says = |method: &str, p: Value| timeout_message(&control_pending::describe(method, &p), control_pending::reads_only(method, &p));
+        let read = says("ui.inspect", json!({}));
+        assert!(read.starts_with("timeout") && read.contains("only reads") && !read.contains("will still apply"), "{read}");
+        let read = says("engine.execute", json!({"command": "sketch.inspect"}));
+        assert!(read.contains("only reads") && read.contains("sketch.inspect"), "{read}");
+        let change = says("engine.execute", json!({"command": "solid.fillet"}));
+        assert!(change.starts_with("timeout") && change.contains("will still apply") && change.contains("solid.fillet"), "{change}");
     }
 
     /// #205: a connection runs nothing until a request carries the launch's token; a wrong or

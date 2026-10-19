@@ -7,7 +7,7 @@ use serde_json::{Map, Value, json};
 use solidcraft_engine::io::vfs;
 use solidcraft_engine::timing;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, STILL_RUNNING};
 
 /// Most commands in one `batch` call.
 const MAX_BATCH: usize = 10_000;
@@ -98,10 +98,16 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "batch",
             "Run several commands",
-            "Run commands in order, stopping at the first error. Each step is {command, params}. On an error the steps \
-             already run are undone (unless rollback: false), so the batch is all-or-nothing; the reply names the failing \
-             step (index from 0), its error, and every result before it. The usual way to build a part: sketch, draw, \
-             dimension, finish, extrude, fillet… in one call.",
+            "Run commands in order, stopping at the first error. Each step is {command, params}: an engine command id \
+             (as list_commands lists them). A step may also name one of these tools with that tool's arguments as params, \
+             and runs the engine command it stands for: set_parameter (parameters.change; `value` or `expression`), \
+             list_commands (engine.commands, with `filter`), execute ({command, params}), measure (inspect.measure), \
+             inspect_design (document.inspect), undo, redo, export, save, open, new_design, crash_reports; screenshot, \
+             body_topology, batch and pending can't be steps. On an error the steps already run are undone (unless \
+             rollback: false), so the batch is all-or-nothing; the reply names the failing step (index from 0), its error, \
+             every result before it, whether the design really went back (rolled_back), the steps whose changes are in the \
+             design (applied) and those never sent (not_run). The usual way to build a part: sketch, draw, dimension, \
+             finish, extrude, fillet… in one call.",
             obj(
                 json!({
                     "commands": {
@@ -123,12 +129,19 @@ pub fn tool_definitions() -> Vec<Value> {
             "Inspect the design",
             "The whole design: user parameters (expression, value, errors), the timeline (features with type, suppressed, \
              rolled back, error, warning, timing), bodies (volume, area, centre of mass, bounding box, face/edge/vertex \
-             counts), sketches (curves with ids and coordinates, points, constraints, profiles, degrees of freedom, solve \
-             status), the active sketch, selection and undo depth.",
+             counts), sketches, the active sketch, selection and undo depth. Sketches are summarised by default (id, name, \
+             plane, counts of points, curves, constraints and profiles, degrees of freedom, solve status); their full contents \
+             (curves with ids and coordinates, points, constraints, profiles) only for the sketches named in `sketches`, or \
+             all with `sketches: true` (large: a 720-point sketch is some 200 KB). Arguments: measure, sketches, bodies.",
             obj(
                 json!({
                     "measure": {"type": "boolean", "description": "Measure bodies (default true)"},
-                    "sketches": {"type": "boolean", "description": "Full sketch contents (default true; false = summary only)"},
+                    "sketches": {
+                        "type": ["boolean", "string", "array"],
+                        "items": {"type": ["string", "integer"]},
+                        "description": "Which sketches in full: a list of sketch names or ids, true (all of them), or false / \"summary\" (none: summaries only, the default)",
+                    },
+                    "bodies": {"type": "array", "items": {"type": "string"}, "description": "Only these bodies, by name (default: all)"},
                 }),
                 &[],
             ),
@@ -156,7 +169,8 @@ pub fn tool_definitions() -> Vec<Value> {
             "List edges and faces",
             "The edges (index, midpoint, length, endpoints) and faces (index, name, area, centroid, plane normal, a `point` that lies \
              on the face, and for a cylindrical face its `cylinder`: origin, axis, radius) of a body. Use an edge midpoint as the \
-             [x,y,z] point that picks the edge for fillet and chamfer; a face's point or its name picks the face for the face commands.",
+             [x,y,z] point that picks the edge for fillet and chamfer; a face's point or its name picks the face for the face commands. \
+             Arguments: body (required).",
             obj(json!({"body": string("Body name, e.g. \"Body1\"")}), &["body"]),
             Effect::ReadOnly,
         ),
@@ -184,7 +198,8 @@ pub fn tool_definitions() -> Vec<Value> {
              Connected to the app: a screenshot of the window (source \"window\", the default) or a render of the model \
              with the app's camera (source \"model\"). Both show an active section (inspect.section) with its cut face \
              capped. `view` first turns the camera to a standard view or a saved named view (view.save), `camera` to              any camera (as view.apply). \
-             `grid: false` and `axes: false` leave the ground grid (on Z 0) and the origin's axes out of a model render.",
+             `grid: false` and `axes: false` leave the ground grid (on Z 0) and the origin's axes out of a model render. \
+             Arguments: view, camera, path, width, height, source, grid, axes (all optional).",
             obj(
                 json!({
                     "view": string(
@@ -237,6 +252,16 @@ pub fn tool_definitions() -> Vec<Value> {
                 }),
                 &[],
             ),
+            Effect::ReadOnly,
+        ),
+        tool(
+            "pending",
+            "Result of a running request",
+            "Bridged to the app: the result of a request that was still running when its tool call returned (an error \
+             starting \"still running:\"). Waits for it up to 60 s: then its own result (or error), or done: false while \
+             it still runs (call again). pending: null when nothing is running. A request still running was not \
+             cancelled: don't send it again; other calls wait for it before they are sent.",
+            obj(json!({}), &[]),
             Effect::ReadOnly,
         ),
         tool("undo", "Undo", "Undo the last change to the design.", obj(json!({}), &[]), Effect::Edits),
@@ -309,7 +334,10 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
     let props = schema["properties"].as_object();
     for (k, v) in a {
         let Some(p) = props.and_then(|p| p.get(k)) else {
-            return Err(format!("{name}: unknown argument `{k}`"));
+            let valid: Vec<&str> = props.map(|p| p.keys().map(String::as_str).collect()).unwrap_or_default();
+            let valid = if valid.is_empty() { "none".to_string() } else { valid.join(", ") };
+            let k: String = k.chars().take(64).collect();
+            return Err(format!("{name}: unknown argument `{k}`; its arguments are: {valid}"));
         };
         if v.is_null() {
             continue;
@@ -331,11 +359,12 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// A tool result: content blocks plus the error flag.
+/// A tool result: content blocks plus the error flag. JSON is compact (not pretty-printed): the
+/// agent reads every byte.
 fn text_result(v: &Value, is_error: bool) -> Value {
     let text = match v {
         Value::String(s) => s.clone(),
-        v => serde_json::to_string_pretty(v).unwrap_or_default(),
+        v => v.to_string(),
     };
     let mut r = json!({"content": [{"type": "text", "text": text}]});
     if is_error {
@@ -376,31 +405,15 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
     match name {
         "list_commands" => {
             let all = b.call("engine.commands", json!({}))?;
-            let Some(f) = str_arg(a, "filter").map(str::to_lowercase).filter(|f| !f.is_empty()) else { return Ok(all) };
-            let hit = |c: &Value| {
-                // Not "params": many docs name other commands (e.g. "usable in sketch.delete"), #269.
-                ["id", "label", "panel", "tab"].iter().any(|k| c.get(*k).and_then(Value::as_str).is_some_and(|s| s.to_lowercase().contains(&f)))
-            };
-            Ok(Value::Array(all.as_array().map(|v| v.iter().filter(|c| hit(c)).cloned().collect()).unwrap_or_default()))
+            Ok(filter_commands(all, str_arg(a, "filter")))
         }
         "execute" => {
             let id = str_arg(a, "command").ok_or("`command` is required")?;
             let v = exec(b, id, a.get("params").cloned().filter(Value::is_object).unwrap_or(json!({})))?;
             Ok(if a.get("verbose").and_then(Value::as_bool).unwrap_or(true) { v } else { compact(v) })
         }
-        "inspect_design" => {
-            let measure = a.get("measure").and_then(Value::as_bool).unwrap_or(true);
-            let mut d = b.call("document.inspect", json!({"measure": measure}))?;
-            if a.get("sketches").and_then(Value::as_bool).unwrap_or(true) {
-                let ids: Vec<Value> = d["sketches"].as_array().map(|v| v.iter().map(|s| s["id"].clone()).collect()).unwrap_or_default();
-                let full: Vec<Value> = ids
-                    .into_iter()
-                    .map(|id| exec(b, "sketch.inspect", json!({"sketch": id.clone()})).unwrap_or_else(|e| json!({"id": id, "error": e})))
-                    .collect();
-                d["sketches"] = Value::Array(full);
-            }
-            Ok(d)
-        }
+        "inspect_design" => inspect_design(b, a),
+        "pending" => pending(b),
         "measure" => {
             if let Some(items) = a.get("items") {
                 return exec(b, "inspect.measure", json!({ "items": items }));
@@ -436,6 +449,195 @@ fn dispatch(b: &mut dyn Backend, name: &str, a: &Map<String, Value>) -> Result<V
     }
 }
 
+/// The command catalog filtered by a case-insensitive substring of id, label, panel or tab
+/// (`list_commands`; not the parameter docs, which name other commands, #269).
+fn filter_commands(all: Value, filter: Option<&str>) -> Value {
+    let Some(f) = filter.map(str::to_lowercase).filter(|f| !f.is_empty()) else { return all };
+    let hit =
+        |c: &Value| ["id", "label", "panel", "tab"].iter().any(|k| c.get(*k).and_then(Value::as_str).is_some_and(|s| s.to_lowercase().contains(&f)));
+    Value::Array(all.as_array().map(|v| v.iter().filter(|c| hit(c)).cloned().collect()).unwrap_or_default())
+}
+
+/// Names for an error message: at most 40 of them.
+fn name_list(names: &[String]) -> String {
+    let mut out = names.iter().take(40).cloned().collect::<Vec<_>>().join(", ");
+    if names.len() > 40 {
+        out.push_str(&format!(", … ({} in all)", names.len()));
+    }
+    if out.is_empty() { "none".into() } else { out }
+}
+
+/// `inspect_design`: `document.inspect`, with sketch summaries unless sketches are asked for in
+/// full (by name or id, or all), and only the bodies asked for.
+fn inspect_design(b: &mut dyn Backend, a: &Map<String, Value>) -> Result<Value, String> {
+    let measure = a.get("measure").and_then(Value::as_bool).unwrap_or(true);
+    let bodies: Option<Vec<String>> = match a.get("bodies").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_array()
+                .and_then(|l| l.iter().map(|n| n.as_str().map(str::to_string)).collect::<Option<Vec<_>>>())
+                .ok_or("inspect_design: `bodies` must be a list of body names")?,
+        ),
+    };
+    // With `bodies`, only those are measured.
+    let mut d = b.call("document.inspect", json!({"measure": measure && bodies.is_none()}))?;
+    if let Some(want) = bodies {
+        let all: Vec<Value> = d["bodies"].as_array().cloned().unwrap_or_default();
+        let names: Vec<String> = all.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect();
+        if let Some(missing) = want.iter().find(|n| !names.contains(n)) {
+            return Err(format!("inspect_design: no body `{missing}` (bodies: {})", name_list(&names)));
+        }
+        let mut kept: Vec<Value> = all.into_iter().filter(|x| x["name"].as_str().is_some_and(|n| want.iter().any(|w| w == n))).collect();
+        if measure && !want.is_empty() {
+            let m = exec(b, "inspect.measure", json!({"bodies": want}))?;
+            for body in &mut kept {
+                let measured = m["bodies"].as_array().and_then(|l| l.iter().find(|x| x["name"] == body["name"])).cloned();
+                if let (Some(Value::Object(fields)), Some(o)) = (measured, body.as_object_mut()) {
+                    for (k, v) in fields {
+                        o.entry(k).or_insert(v);
+                    }
+                }
+            }
+        }
+        d["bodies"] = Value::Array(kept);
+    }
+    let sketches: Vec<Value> = d["sketches"].as_array().cloned().unwrap_or_default();
+    let full: Vec<Value> = match a.get("sketches") {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => Vec::new(),
+        Some(Value::String(t)) if t == "summary" => Vec::new(),
+        Some(Value::Bool(true)) => sketches.iter().map(|x| x["id"].clone()).collect(),
+        Some(Value::String(t)) if t == "full" || t == "all" => sketches.iter().map(|x| x["id"].clone()).collect(),
+        Some(Value::Array(list)) => {
+            let mut ids = Vec::new();
+            for want in list {
+                let found = sketches.iter().find(|x| match want {
+                    Value::String(n) => x["name"].as_str() == Some(n.as_str()) || x["id"].as_u64().is_some_and(|id| n.parse::<u64>() == Ok(id)),
+                    Value::Number(_) => x["id"] == *want,
+                    _ => false,
+                });
+                match found {
+                    Some(x) => ids.push(x["id"].clone()),
+                    None => {
+                        let names: Vec<String> = sketches.iter().filter_map(|x| x["name"].as_str().map(str::to_string)).collect();
+                        return Err(format!("inspect_design: no sketch {want} (sketches: {})", name_list(&names)));
+                    }
+                }
+            }
+            ids
+        }
+        Some(other) => {
+            return Err(format!("inspect_design: `sketches` must be true, false, \"summary\" or a list of sketch names (got {other})"));
+        }
+    };
+    if !full.is_empty() {
+        let out: Vec<Value> = sketches
+            .into_iter()
+            .map(|x| {
+                if full.contains(&x["id"]) {
+                    exec(b, "sketch.inspect", json!({"sketch": x["id"].clone()})).unwrap_or_else(|e| json!({"id": x["id"], "error": e}))
+                } else {
+                    x
+                }
+            })
+            .collect();
+        d["sketches"] = Value::Array(out);
+    }
+    Ok(d)
+}
+
+/// `pending`: the end of a request still running when its call returned (bridged only; a
+/// headless session runs every request to its end).
+fn pending(b: &mut dyn Backend) -> Result<Value, String> {
+    let p = b.call("control.pending", json!({}))?;
+    let what = p.get("pending").cloned().unwrap_or(Value::Null);
+    if what.is_null() {
+        return Ok(json!({"pending": null, "note": "nothing is running"}));
+    }
+    let name = what.as_str().unwrap_or("the request").to_string();
+    if p.get("lost").and_then(Value::as_bool) == Some(true) {
+        return Err(format!(
+            "the connection to the app was lost while {name} was running, and its result with it: inspect the design (inspect_design) \
+             to see whether it applied before sending it again"
+        ));
+    }
+    if p.get("done").and_then(Value::as_bool) == Some(true) {
+        let reply = p.get("reply").cloned().unwrap_or(Value::Null);
+        return match reply.get("ok").and_then(Value::as_bool) {
+            Some(true) => Ok(json!({"pending": what, "done": true, "result": reply.get("result").cloned().unwrap_or(Value::Null)})),
+            _ => Err(format!("{name} failed: {}", reply.get("error").and_then(Value::as_str).unwrap_or("no reply"))),
+        };
+    }
+    Ok(json!({"pending": what, "done": false, "running_s": p.get("running_s"), "note": "still running: call pending again to keep waiting"}))
+}
+
+/// A `batch` step as the engine command it runs: an engine command as it is, or one of these
+/// tools' names (an agent writes the tool it knows) with that tool's arguments as its params.
+/// `Ok((command, params, filter))`: `filter` narrows a `list_commands` step's catalog; an empty
+/// `command` means the step is an engine command already.
+fn batch_step(step: &Value) -> Result<(String, Value, Option<String>), String> {
+    let command = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str).ok_or("missing `command`")?;
+    let empty = Map::new();
+    let params = step.get("params").cloned().filter(|p| !p.is_null()).unwrap_or(json!({}));
+    let a = params.as_object().unwrap_or(&empty);
+    let mapped = |c: &str, p: Value| Ok((c.to_string(), p, None));
+    match command {
+        "list_commands" => Ok(("engine.commands".into(), json!({}), str_arg(a, "filter").map(str::to_string))),
+        "set_parameter" => {
+            let mut p = pick(a, &["name", "unit", "comment"]);
+            p["expression"] = a.get("expression").or_else(|| a.get("value")).cloned().unwrap_or(Value::Null);
+            mapped("parameters.change", p)
+        }
+        "execute" => {
+            let inner = str_arg(a, "command").ok_or("an `execute` step needs params {command, params}")?;
+            if !inner.contains('.') && TOOL_STEPS.contains(&inner) {
+                return Err(format!("an `execute` step runs an engine command, not the `{inner}` tool"));
+            }
+            mapped(inner, a.get("params").cloned().filter(Value::is_object).unwrap_or(json!({})))
+        }
+        "measure" => match a.get("items") {
+            Some(items) => mapped("inspect.measure", json!({"items": items})),
+            None => mapped("inspect.measure", str_arg(a, "body").map_or(json!({}), |body| json!({"bodies": [body]}))),
+        },
+        "inspect_design" => mapped("document.inspect", json!({"measure": a.get("measure").and_then(Value::as_bool).unwrap_or(true)})),
+        "undo" => mapped("edit.undo", json!({})),
+        "redo" => mapped("edit.redo", json!({})),
+        "export" => mapped("file.export", pick(a, &["path", "format", "bodies", "mesh_prefix", "effort", "velocity"])),
+        "save" => mapped("file.save", pick(a, &["path", "format"])),
+        "open" => mapped("doc.open", pick(a, &["path", "up", "names"])),
+        "new_design" => mapped("file.new", pick(a, &["name"])),
+        "crash_reports" => match a.get("id") {
+            Some(_) => mapped("diagnostics.crash_report", pick(a, &["id"])),
+            None => mapped("diagnostics.crash_reports", pick(a, &["limit"])),
+        },
+        "body_topology" => Err("`body_topology` is a tool, not a command: in a batch use model.edges {body} and model.faces {body}".into()),
+        "screenshot" => Err("`screenshot` is a tool, not a command: call it after the batch".into()),
+        "batch" => Err("batches don't nest: put the steps in this batch".into()),
+        "pending" => Err("`pending` is a tool, not a command: call it on its own".into()),
+        // An engine command: the step goes as it is.
+        _ => Ok((String::new(), Value::Null, None)),
+    }
+}
+
+/// The tool names a `batch` step may not be (or is mapped from): `execute` must not wrap them.
+const TOOL_STEPS: &[&str] = &[
+    "batch",
+    "body_topology",
+    "crash_reports",
+    "execute",
+    "export",
+    "inspect_design",
+    "list_commands",
+    "measure",
+    "new_design",
+    "open",
+    "pending",
+    "redo",
+    "save",
+    "screenshot",
+    "set_parameter",
+    "undo",
+];
+
 fn undo_depth(b: &mut dyn Backend) -> Option<u64> {
     b.call("document.inspect", json!({})).ok().and_then(|d| d["undo"].as_u64())
 }
@@ -458,15 +660,16 @@ impl Undo {
         }
     }
 
-    /// Go back; the number of steps undone.
-    fn rollback(self, b: &mut dyn Backend, steps: usize) -> u64 {
+    /// Go back: whether the design really is back where the batch started, and the number of
+    /// steps undone.
+    fn rollback(self, b: &mut dyn Backend, steps: usize) -> (bool, u64) {
         match self {
             Undo::Checkpoint(id) => match exec(b, "edit.restore_checkpoint", json!({"checkpoint": id})) {
-                Ok(_) => steps as u64,
-                Err(_) => 0,
+                Ok(_) => (true, steps as u64),
+                Err(_) => (false, 0),
             },
             Undo::Depth(before) => {
-                let after = undo_depth(b).unwrap_or(before);
+                let Some(after) = undo_depth(b) else { return (false, 0) };
                 let mut undone = 0u64;
                 for _ in before..after {
                     if exec(b, "edit.undo", json!({})).is_err() {
@@ -474,9 +677,9 @@ impl Undo {
                     }
                     undone += 1;
                 }
-                undone
+                (undone == after.saturating_sub(before), undone)
             }
-            Undo::None => 0,
+            Undo::None => (false, 0),
         }
     }
 
@@ -501,6 +704,44 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
     let verbose = a.get("verbose").and_then(Value::as_bool).unwrap_or(true);
     let profile = a.get("profile").and_then(Value::as_bool).unwrap_or(false);
     let timed = profile || a.get("timings").and_then(Value::as_bool).unwrap_or(false);
+    // Steps that name a tool run the engine command it stands for. One that can't be a step
+    // fails the batch before anything is sent.
+    let mut mapped: Vec<Value> = Vec::with_capacity(steps.len());
+    let mut filters: Vec<(usize, String)> = Vec::new();
+    for (i, step) in steps.iter().enumerate() {
+        match batch_step(step) {
+            Ok((command, _, _)) if command.is_empty() => mapped.push(step.clone()),
+            Ok((command, params, filter)) => {
+                if let Some(f) = filter {
+                    filters.push((i, f));
+                }
+                mapped.push(json!({"command": command, "params": params}));
+            }
+            // A step without a command fails where it stands, as before.
+            Err(e) if e == "missing `command`" => mapped.push(step.clone()),
+            Err(e) => {
+                let command = step.get("command").or_else(|| step.get("id")).and_then(Value::as_str);
+                let reply = json!({
+                    "ok": false,
+                    "completed": 0,
+                    "failed": {"index": i, "command": command, "error": e},
+                    "rolled_back": false,
+                    "undone": 0,
+                    "applied": [],
+                    "not_run": (0..steps.len()).collect::<Vec<_>>(),
+                    "results": [],
+                    "note": "nothing was run",
+                });
+                return text_result(&reply, true);
+            }
+        }
+    }
+    let steps = &mapped;
+    // A `list_commands` step's catalog, filtered as the tool filters it.
+    let narrow = |i: usize, v: Value| match filters.iter().find(|(j, _)| *j == i) {
+        Some((_, f)) => filter_commands(v, Some(f)),
+        None => v,
+    };
     // An app that runs batches itself answers the whole batch in one request, so one frame
     // (#743). One too long for a control line goes step by step: the app would refuse it unrun.
     // The margin covers the envelope and the `allow_paths` the backend adds.
@@ -511,11 +752,14 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
     }
     if params.to_string().len() + 64 * 1024 <= solidcraft_engine::MAX_LINE {
         match b.call("engine.batch", params) {
-            Ok(r) => return batch_reply(&r, rollback, verbose),
+            Ok(r) => return batch_reply(&r, steps.len(), rollback, verbose, &narrow),
             // Older apps and the headless session, or the app wants the steps one by one.
             Err(e) if e.starts_with("unknown method") || e.starts_with("engine.batch unavailable") => {}
-            // Never sent: no app to send it to.
-            Err(e) if e.starts_with(crate::backend::NOT_RUNNING) => return text_result(&Value::String(e), true),
+            // Never sent: no app to send it to. Or sent and still running (it was not cancelled):
+            // the `pending` tool gets its result.
+            Err(e) if e.starts_with(crate::backend::NOT_RUNNING) || e.starts_with(STILL_RUNNING) => {
+                return text_result(&Value::String(e), true);
+            }
             // The app may have run it: sending the steps again would apply them twice.
             Err(e) => {
                 let msg = format!("the app did not answer engine.batch ({e}); it may have run: inspect the design before sending it again");
@@ -539,15 +783,31 @@ fn batch(b: &mut dyn Backend, a: &Map<String, Value>) -> Value {
             rows.push(took.to_json(i, command.unwrap_or_default()));
         }
         match r {
-            Ok(v) => results.push(if verbose { v } else { compact(v) }),
+            Ok(v) => {
+                let v = narrow(i, v);
+                results.push(if verbose { v } else { compact(v) })
+            }
             Err(e) => {
-                let undone = start.rollback(b, i);
+                // A step still running in the app was not cancelled: the rollback first waits for
+                // it (the backend does), so a restored checkpoint takes it back too.
+                let running = e.starts_with(STILL_RUNNING);
+                let (rolled_back, undone) = start.rollback(b, i);
+                let mut failed = json!({"index": i, "command": command, "error": e});
+                // Applied: the steps before it, unless rolled back; and the step itself while it
+                // still runs, as it will apply when it finishes.
+                let mut applied: Vec<usize> = if rolled_back { Vec::new() } else { (0..i).collect() };
+                if running && !rolled_back {
+                    failed["still_running"] = json!(true);
+                    applied.push(i);
+                }
                 let reply = json!({
                     "ok": false,
                     "completed": i,
-                    "failed": {"index": i, "command": command, "error": e},
-                    "rolled_back": rollback,
+                    "failed": failed,
+                    "rolled_back": rolled_back,
                     "undone": undone,
+                    "applied": applied,
+                    "not_run": (i + 1..steps.len()).collect::<Vec<_>>(),
                     "results": results,
                 });
                 return text_result(&with_timings(reply, timed, rows, clock.ms()), true);
@@ -569,22 +829,39 @@ fn with_timings(mut reply: Value, timed: bool, rows: Vec<Value>, total_ms: f64) 
 }
 
 /// The `batch` reply from the app's `engine.batch` answer, shaped as the per-step path shapes it.
-fn batch_reply(r: &Value, rollback: bool, verbose: bool) -> Value {
-    let results: Vec<Value> =
-        r["results"].as_array().cloned().unwrap_or_default().into_iter().map(|v| if verbose { v } else { compact(v) }).collect();
+fn batch_reply(r: &Value, len: usize, rollback: bool, verbose: bool, narrow: &dyn Fn(usize, Value) -> Value) -> Value {
+    let results: Vec<Value> = r["results"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| narrow(i, v))
+        .map(|v| if verbose { v } else { compact(v) })
+        .collect();
     let (mut reply, error) = match r.get("failed").filter(|f| !f.is_null()) {
         None => (json!({"ok": true, "completed": results.len(), "results": results}), false),
-        Some(failed) => (
-            json!({
-                "ok": false,
-                "completed": r["completed"],
-                "failed": failed,
-                "rolled_back": rollback,
-                "undone": r["undone"],
-                "results": results,
-            }),
-            true,
-        ),
+        Some(failed) => {
+            let completed = r["completed"].as_u64().map_or(results.len(), |c| c as usize).min(len);
+            // An app that says whether it went back is believed; an older one went back when it
+            // undid every completed step.
+            let rolled_back =
+                r.get("rolled_back").and_then(Value::as_bool).unwrap_or_else(|| rollback && r["undone"].as_u64() == Some(completed as u64));
+            let applied: Vec<usize> = if rolled_back { Vec::new() } else { (0..completed).collect() };
+            (
+                json!({
+                    "ok": false,
+                    "completed": r["completed"],
+                    "failed": failed,
+                    "rolled_back": rolled_back,
+                    "undone": r["undone"],
+                    "applied": applied,
+                    "not_run": (completed + 1..len).collect::<Vec<_>>(),
+                    "results": results,
+                }),
+                true,
+            )
+        }
     };
     // The app timed the steps where they ran.
     if let Some(o) = reply.as_object_mut() {
