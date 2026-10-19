@@ -130,6 +130,7 @@ mod preselect_tests;
 pub mod preview;
 #[cfg(test)]
 mod primitive_units_tests;
+mod quick_measure;
 pub mod recovery_ui;
 pub mod ref_images;
 pub mod render_workspace;
@@ -306,6 +307,7 @@ pub struct SolveApp {
     pub services: Services,
     file_picker: Option<file_picker::Pending>,
     pub viewport: viewport::ViewportState,
+    pub(crate) quick_measure: quick_measure::State,
     pub render_workspace: render_workspace::State,
     pub tool: Option<tools::Tool>,
     pub dialog: Option<dialogs::Dialog>,
@@ -439,6 +441,7 @@ impl SolveApp {
             services,
             file_picker: None,
             viewport: viewport::ViewportState::default(),
+            quick_measure: quick_measure::State::default(),
             render_workspace,
             tool: None,
             dialog: None,

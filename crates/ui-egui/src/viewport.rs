@@ -2810,6 +2810,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     crate::select_other::show(app, ui.ctx());
     axis_view(app, ui, rect);
     nav_bar(app, ui, rect);
+    let mut readout_obstacles = Vec::new();
     // A command recomputing the history off the window thread (the marker moved, undo): the
     // window goes on, and says so above the status chip.
     if let Some(since) = app.computing_since() {
@@ -2818,6 +2819,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let pos = pos2(rect.left() + 12.0, rect.bottom() - 76.0);
         let galley = painter.layout_no_wrap(text, FontId::proportional(12.5), t.text);
         let r = Rect::from_min_size(pos, galley.size() + vec2(34.0, 8.0));
+        readout_obstacles.push(r);
         painter.rect_filled(r, 4.0, t.overlay);
         egui::Spinner::new().size(12.0).paint_at(ui, Rect::from_center_size(pos2(r.left() + 13.0, r.center().y), vec2(12.0, 12.0)));
         painter.galley(pos + vec2(26.0, 4.0), galley, t.text);
@@ -2829,6 +2831,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             let pos = pos2(rect.left() + 12.0, rect.bottom() - 46.0);
             let galley = painter.layout_no_wrap(msg, FontId::proportional(12.5), if err { t.error } else { t.text });
             let r = Rect::from_min_size(pos, galley.size() + vec2(16.0, 8.0));
+            readout_obstacles.push(r);
             painter.rect_filled(r, 4.0, t.overlay);
             painter.galley(pos + vec2(8.0, 4.0), galley, t.text);
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
@@ -2836,6 +2839,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             app.status = None;
         }
     }
+    crate::quick_measure::paint(app, ui, &painter, rect, &readout_obstacles);
 }
 
 /// A click without a command: select the candidate (replacing the selection, or toggling it
