@@ -451,7 +451,7 @@ pub(crate) fn handle(app: &mut SolveApp, ui: &mut egui::Ui, rect: Rect, resp: &e
     } else if mode == Some(NavMode::Orbit) {
         let press = ui.input(|i| i.pointer.press_origin());
         app.cancel_view_animation();
-        // Shift can be required to enter orbit (Fusion/Inventor middle drag, Alias Shift+Alt),
+        // Shift can be required to enter orbit (middle drag, Alias Shift+Alt),
         // rather than an additional request for snapping. Only an extra modifier snaps.
         let without_shift = egui::Modifiers { shift: false, ..mods };
         let snap = app.preferences.nav != crate::prefs::OPENSCAD_NAV
@@ -574,7 +574,8 @@ pub(crate) struct OrbitSnap {
     pub(crate) target: Camera,
     pub(crate) yaw_velocity: f64,
     pub(crate) pitch_velocity: f64,
-    pub(crate) pivot: Option<(Vec3, Pos2)>,
+    /// The pivot and where it lies in the camera's frame ([`Camera::frame_coords`]).
+    pub(crate) pivot: Option<(Vec3, Vec3)>,
 }
 
 /// Pointer motion accumulates independently of the spring preview, so many small deltas
@@ -610,10 +611,7 @@ pub(crate) fn orbit_drag(app: &mut SolveApp, rect: Rect, dx: f64, dy: f64, press
         } else {
             None
         }
-        .and_then(|p| {
-            app.cam = displayed;
-            projection(app, rect).to_screen(p).map(|at| (p, at))
-        });
+        .map(|p| (p, displayed.frame_coords(p)));
         let spring = app.viewport.orbit_snap.get_or_insert(OrbitSnap { target, yaw_velocity: 0.0, pitch_velocity: 0.0, pivot });
         spring.target = target;
         spring.pivot = pivot;
@@ -623,7 +621,7 @@ pub(crate) fn orbit_drag(app: &mut SolveApp, rect: Rect, dx: f64, dy: f64, press
 
 /// A lightly damped spring: mostly settled in about a third of a second, with a small
 /// elastic finish. Bounded substeps keep the behavior consistent across frame rates.
-pub(crate) fn step_orbit_snap(app: &mut SolveApp, rect: Rect, dt: f64) {
+pub(crate) fn step_orbit_snap(app: &mut SolveApp, _rect: Rect, dt: f64) {
     let Some(mut spring) = app.viewport.orbit_snap.take() else { return };
     let dt = if dt.is_finite() { dt.clamp(0.0, 0.05) } else { 1.0 / 60.0 };
     let steps = (dt * 240.0).ceil().max(1.0) as usize;
@@ -645,10 +643,8 @@ pub(crate) fn step_orbit_snap(app: &mut SolveApp, rect: Rect, dt: f64) {
     if done {
         app.cam = spring.target;
     }
-    if let Some((pivot, at)) = spring.pivot
-        && let Some(after) = projection(app, rect).to_screen(pivot)
-    {
-        app.cam.pan(f64::from(at.x - after.x), f64::from(at.y - after.y), f64::from(rect.height().max(1.0)));
+    if let Some((pivot, coords)) = spring.pivot {
+        app.cam.place(pivot, coords);
     }
     if !done {
         app.viewport.orbit_snap = Some(spring);
@@ -707,18 +703,7 @@ pub fn orbit(app: &mut SolveApp, rect: egui::Rect, dx: f64, dy: f64, press: Opti
         app.cam.orbit(dx, dy);
         return;
     };
-    orbit_about(app, rect, dx, dy, pivot);
-}
-
-/// Orbit by pixel deltas, keeping `pivot` still on screen: the camera turns about it and a pan
-/// correction puts it back where it was.
-pub(crate) fn orbit_about(app: &mut SolveApp, rect: egui::Rect, dx: f64, dy: f64, pivot: Vec3) {
-    let before = crate::viewport::projection(app, rect).to_screen(pivot);
-    app.cam.orbit(dx, dy);
-    let after = crate::viewport::projection(app, rect).to_screen(pivot);
-    if let (Some(a), Some(b)) = (before, after) {
-        app.cam.pan(f64::from(a.x - b.x), f64::from(a.y - b.y), f64::from(rect.height().max(1.0)));
-    }
+    app.cam.orbit_about(dx, dy, pivot);
 }
 
 #[cfg(test)]

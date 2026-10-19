@@ -36,7 +36,7 @@ thread_local! {
     static DEFERRED: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Commands registered on one panel that Fusion also lists on another: the analyses (sketch
+/// Commands registered on one panel that another panel also lists: the analyses (sketch
 /// INSPECT) on SOLID INSPECT, and Interference (SOLID INSPECT) on sketch INSPECT.
 const ALSO_IN: &[(&str, &str, &str)] = &[
     ("SOLID", "INSPECT", "inspect.zebra"),
@@ -258,7 +258,7 @@ fn combs(app: &SolveApp, painter: &egui::Painter, proj: &Proj) {
     });
 }
 
-/// Snap a cursor point on the sketch plane to what Fusion infers while drawing: a line's
+/// Snap a cursor point on the sketch plane to what is inferred while drawing: a line's
 /// midpoint, or alignment (horizontal/vertical) with the previous point of the tool. None:
 /// nothing near, use the grid.
 pub fn refine_snap(

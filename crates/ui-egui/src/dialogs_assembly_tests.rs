@@ -273,7 +273,7 @@ fn picks_on_one_component_say_why_and_offer_components() {
     assert!(text_at(&out, &why).is_none(), "nothing left to say");
 }
 
-/// Two top faces mate face to face as in Fusion: B ends up upside down on A, not inside it;
+/// Two top faces mate face to face: B ends up upside down on A, not inside it;
 /// Flip turns it back over (into A).
 #[test]
 fn face_snaps_mate_face_to_face() {
