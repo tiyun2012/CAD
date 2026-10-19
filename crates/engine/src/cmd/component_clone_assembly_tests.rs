@@ -22,6 +22,7 @@ fn joint(id: u64, a: u64, b: u64) -> Joint {
         offset: 2.0,
         angle: 0.1,
         suppressed: false,
+        exprs: Default::default(),
     }
 }
 

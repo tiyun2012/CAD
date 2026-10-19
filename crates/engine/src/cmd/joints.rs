@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Value, json};
 use solidcraft_doc::expr::Kind;
 use solidcraft_doc::joints::cam::{self, Cam, CamProfile, Follower};
-use solidcraft_doc::joints::{self, Coupling, Joint, JointKind, JointOrigin, MotionLink, NamedOrigin, Size, Snap, XRef};
+use solidcraft_doc::joints::{self, Coupling, Joint, JointExprs, JointKind, JointOrigin, MotionLink, NamedOrigin, Size, Snap, XRef};
 use solidcraft_geom::{Aabb3, Vec3};
 
 use super::CommandSpec;
@@ -23,7 +23,9 @@ pub static COMMANDS: &[CommandSpec] = &[
         "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball; a, b: joint origins ({occurrence, face|circle|edge|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
          values?: [angles in deg or expressions, distances]; limits?: [[min, max] | null…]; flip?: bool (default false: the origins are mated, \
          b's z against a's as two faces meet; true: b's z along a's, so two origins given at one point with the same z stay as they are); \
-         offset?; angle?; name?; quiet?: bool (leave out dof and fixed)",
+         offset?: mm or an expression; angle?: deg or an expression; name?; quiet?: bool (leave out dof and fixed). An expression (text) is \
+         kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
+         expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
     CommandSpec::new("joint.as_built", "As-Built Joint", as_built).at("SOLID", "ASSEMBLE").icon("as_built").params(
         "type, a: occurrence, b: occurrence (stay where they are); at?: joint origin (default: b's origin) — the joint's frame; \
@@ -31,7 +33,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     ),
     CommandSpec::new("joint.rigid_group", "Rigid Group", rigid_group).at("SOLID", "ASSEMBLE").icon("rigid_group").params("occurrences: [ids or names] (move together, as they are)"),
     CommandSpec::new("joint.drive", "Drive Joints", drive).at("SOLID", "ASSEMBLE").icon("drive").params(
-        "joint: id|name; value | values: [angles in deg or expressions, distances] (values not given keep theirs; clamped to the limits; the other joints of a \
+        "joint: id|name; value | values: [angles in deg or expressions, distances] (values not given keep theirs; a value driven drops the expression joint.create gave it; clamped to the limits; the other joints of a \
          closed loop follow, and the motion stops where the loop can no longer close → stopped_by_loop); quiet?: bool (leave out dof \
          and fixed) → values: [{name, value, unit: deg|mm, limits}] as joint.list gives them; moved: whether any occurrence moved; \
          reason: why the joint can move nothing (suppressed, its origins lost, or its chain joined to nothing grounded → unconnected: \
@@ -65,10 +67,12 @@ pub static COMMANDS: &[CommandSpec] = &[
         "a: the cam's joint (revolute); b: the follower's joint, a slider (a translating follower) or a revolute (an oscillating one),          b driven by a; profile: {sketch: id|name, index?: the profile (default: the largest)} | {edges: [[x,y,z]…] (points on edges of          the cam's bodies forming one closed loop, world), occurrence?}: the cam's outline, in a plane square to its axis, read again          whenever the design changes; follower?: knife|roller|flat (default knife; flat: a face square to a slider's line); radius?: the          roller's radius (mm, an expression or {circle: [x,y,z], occurrence?}: the roller's round face, which is its tip too); tip?: a          joint origin where the follower touches: its knife's point or its roller's centre, such as {circle: [x,y,z]} on the roller          (needed for an oscillating follower; a translating one's line runs through it, by default along its slider's axis); flip?: bool (ride the cam from the other side          than the one the follower is on now); link?: index (replace that motion link) → link, lift: {min, max, rise, unit} (b's travel          over a turn of the cam), reverse (the side it rides from), follower_offset (mm: how far a translating follower's line passes          from the cam's axis); b keeps where it is",
     ),
     CommandSpec::new("joint.limits", "Joint Limits", limits).icon("joint").params("joint; index?: value index (default 0); min?, max? (omit both to clear)"),
-    CommandSpec::new("joint.edit", "Edit Joint", edit).icon("edit").params("joint; type?, flip?, offset?, angle?, suppressed?, name?"),
+    CommandSpec::new("joint.edit", "Edit Joint", edit)
+        .icon("edit")
+        .params("joint; type?, flip?, offset?, angle? (a number, or an expression the joint then follows), suppressed?, name?"),
     CommandSpec::new("joint.delete", "Delete Joint", delete).icon("delete").params("joint: id|name (or origin: name, link: index)"),
     CommandSpec::new("joint.list", "List Joints", list).icon("list").noundo().params(
-        "→ joints (type, occurrences, values, limits), origins, links, degrees of freedom, conflicts, floating: [{occurrences, joints}] \
+        "→ joints (type, occurrences, values, limits; expressions: {offset?, angle?, values?} when they were typed as expressions), origins, links, degrees of freedom, conflicts, floating: [{occurrences, joints}] \
          (joint chains joined to nothing grounded: the solver places none of them, so driving them moves nothing)",
     ),
     CommandSpec::new("joint.solve", "Solve Joints", solve_cmd).icon("compute").params("re-place the occurrences from the joints → conflicts, errors, dof"),
@@ -80,8 +84,37 @@ pub static COMMANDS: &[CommandSpec] = &[
 /// Re-solve the joints and move the occurrences they place (after any edit). Gears, racks and
 /// screws first take their ratios from the radii and pitches they are defined by.
 pub fn resolve(s: &mut Session) -> joints::Solution {
+    reexpress(s);
     recouple(s);
     resolve_holding(s, &BTreeMap::new())
+}
+
+/// Work out the offsets, angles and values joints were given as expressions again (a parameter
+/// may have changed). One that can't be worked out (its parameter gone) keeps its numbers; the
+/// solve leaves that joint out and says why.
+fn reexpress(s: &mut Session) {
+    let changed: Vec<(usize, (f64, f64, Vec<f64>))> = s
+        .doc
+        .assembly
+        .joints
+        .iter()
+        .enumerate()
+        .filter(|(_, j)| !j.exprs.is_empty())
+        .filter_map(|(i, j)| {
+            let (o, a, mut q) = joints::expressed(&s.doc, j).ok()?;
+            joints::clamp(j, &mut q);
+            ((o, a) != (j.offset, j.angle) || q != j.values).then_some((i, (o, a, q)))
+        })
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    let doc = s.doc_mut();
+    for (i, (o, a, q)) in changed {
+        if let Some(j) = doc.assembly.joints.get_mut(i) {
+            (j.offset, j.angle, j.values) = (o, a, q);
+        }
+    }
 }
 
 /// Work out the ratios (and cam tables) of the coupled motion links again (a radius, a parameter
@@ -449,6 +482,28 @@ pub(crate) fn value(s: &Session, v: &Value, angle: bool, cmd: &str) -> Result<f6
     s.doc.eval(&e, kind).map_err(|e| bad(cmd, e.to_string()))
 }
 
+/// The expression a number was typed as, kept so the joint follows the parameters it names
+/// (`None` for a plain number, or for text that names no parameter, such as `"5 mm"`).
+fn typed(v: Option<&Value>) -> Option<String> {
+    match v {
+        Some(Value::String(t)) if !solidcraft_doc::expr::references(t).is_empty() => Some(t.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// The expressions among `values` (or `value`), by index.
+fn value_exprs(p: &Value) -> Vec<Option<String>> {
+    let mut out: Vec<Option<String>> = match (p.get("values"), p.get("value")) {
+        (Some(Value::Array(a)), _) => a.iter().map(|v| typed(Some(v))).collect(),
+        (_, Some(v)) => vec![typed(Some(v))],
+        _ => Vec::new(),
+    };
+    while out.last().is_some_and(Option::is_none) {
+        out.pop();
+    }
+    out
+}
+
 fn values_param(s: &Session, p: &Value, kind: JointKind, cmd: &str) -> Result<Vec<f64>> {
     let n = kind.dofs().len();
     let list: Vec<Value> = match (p.get("values"), p.get("value")) {
@@ -589,6 +644,7 @@ fn joint(s: &mut Session, p: &Value) -> Result<Value> {
         offset,
         angle,
         suppressed: false,
+        exprs: JointExprs { offset: typed(p.get("offset")), angle: typed(p.get("angle")), values: value_exprs(p) },
     };
     add_joint(s, j, p)
 }
@@ -622,6 +678,7 @@ fn as_built(s: &mut Session, p: &Value) -> Result<Value> {
         offset: 0.0,
         angle: 0.0,
         suppressed: false,
+        exprs: Default::default(),
     };
     add_joint(s, j, p)
 }
@@ -666,6 +723,11 @@ fn drive(s: &mut Session, p: &Value) -> Result<Value> {
     joints::clamp(j, &mut q);
     // Moved as far toward `q` as contact sets and closed loops allow. Values left out of
     // `values` are not driven: in a closed loop they follow.
+    // Driving moves the joint by hand: the values driven drop their expressions (an expression
+    // given here is worked out once, as contact or a loop may stop the motion short of it).
+    for i in 0..given.min(kind.dofs().len()) {
+        j.exprs.set_value(i, None);
+    }
     let before = super::motion::positions(s);
     let r = super::motion::drive_joint(s, id, q, given)?;
     let sol = joints::solve(&s.doc, &s.model.state());
@@ -1126,15 +1188,26 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = s.doc_mut();
     let Some(j) = doc.assembly.joints.iter_mut().find(|j| j.id == id) else { return Err(bad(cmd, "joint")) };
     if let Some(k) = kind {
+        let was = j.kind;
         j.kind = k;
         j.values.resize(k.dofs().len(), 0.0);
         j.limits.resize(k.dofs().len(), None);
+        j.exprs.values.truncate(k.dofs().len());
+        // A value that changes unit with the type (a slide becoming a turn) drops its expression,
+        // which would no longer work out and leave the joint out of the solve.
+        for i in 0..j.exprs.values.len() {
+            if was.is_angle(i) != k.is_angle(i) {
+                j.exprs.set_value(i, None);
+            }
+        }
     }
     if let Some(o) = offset {
         j.offset = o;
+        j.exprs.offset = typed(p.get("offset"));
     }
     if let Some(a) = angle {
         j.angle = a;
+        j.exprs.angle = typed(p.get("angle"));
     }
     if let Some(f) = bool_(p, "flip") {
         j.flip = f;
@@ -1192,8 +1265,12 @@ fn list(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|j| {
             let named = named_values(j, vals.get(&j.id).map(Vec::as_slice).unwrap_or_default());
             let world = |o: &JointOrigin| s.doc.origin_world(&st, o).ok().map(|m| json!({"origin": [m[3][0], m[3][1], m[3][2]], "z": [m[2][0], m[2][1], m[2][2]]}));
-            json!({"id": j.id, "name": j.name, "type": j.kind, "a": j.a.occurrence, "b": j.b.occurrence, "values": named,
-                "flip": j.flip, "offset": j.offset, "suppressed": j.suppressed, "visible": s.joint_visible(j.id), "frame_a": world(&j.a), "frame_b": world(&j.b)})
+            let mut out = json!({"id": j.id, "name": j.name, "type": j.kind, "a": j.a.occurrence, "b": j.b.occurrence, "values": named,
+                "flip": j.flip, "offset": j.offset, "suppressed": j.suppressed, "visible": s.joint_visible(j.id), "frame_a": world(&j.a), "frame_b": world(&j.b)});
+            if !j.exprs.is_empty() {
+                out["expressions"] = json!(j.exprs);
+            }
+            out
         })
         .collect();
     let links: Vec<Value> = s
@@ -1326,6 +1403,9 @@ pub(crate) fn overlapping_pairs(boxes: &[Aabb3], limit: usize) -> (Vec<(usize, u
 #[cfg(test)]
 #[path = "joint_edge_tests.rs"]
 mod edge_tests;
+#[cfg(test)]
+#[path = "joints_exprs_tests.rs"]
+mod exprs_tests;
 #[cfg(test)]
 #[path = "joints_face_tests.rs"]
 mod face_tests;
