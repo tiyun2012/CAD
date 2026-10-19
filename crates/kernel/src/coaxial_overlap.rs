@@ -200,7 +200,7 @@ fn near(pin: &Wall, hole: &Wall, same: f64) -> Option<(Vec3, f64)> {
     if !(offset + gap <= NEAR * pin.radius.min(hole.radius)) {
         return None;
     }
-    let toward = across.normalized().unwrap_or_else(|| pin.axis.any_perp());
+    let toward = across.normalized().unwrap_or_else(|| *pin.axis.any_perp());
     Some((toward, offset))
 }
 

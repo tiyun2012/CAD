@@ -1307,7 +1307,7 @@ pub fn planar_face(s: &Session, body: &str, face: usize) -> Option<(Vec3, Vec3)>
     let b = st.body(body)?;
     let tol = (b.body.size() * 1e-3).max(1e-3);
     let f = b.body.faces(tol).ok()?.into_iter().find(|f| f.index == face)?;
-    Some((f.centroid, f.plane_normal?))
+    Some((f.centroid, *f.plane_normal?))
 }
 
 fn polyline_mid(pts: &[Vec3]) -> Vec3 {
