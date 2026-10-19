@@ -20,10 +20,11 @@ pub static COMMANDS: &[CommandSpec] = &[
         "name?, occurrence?: id|name (default: from the pick, or the named face's component), face: [x,y,z] | \"<name>\" (centre of a planar face) | circle: [x,y,z] | \"<name>\" (centre of a round end: a point on its wall or rim, the end's centre, or the round face's name as model.faces lists it) | edge: [x,y,z] (a point on an edge of a planar face: the edge's middle, z out of the face, y into it; on?: [x,y,z] a point on the face (default: the larger planar face beside the edge); corner?: [x,y,z] near one end: the corner there, x and y along its two edges into the face; found again by name, so it follows the face as it changes size) | point: [x,y,z], z?: [x,y,z]; body?: the named face's body; end?: \"<name>\" (a circle's end: the face across its rim there; default the end nearer the pick); x?: [x,y,z] (a direction, world) | \"<face name>\" | {face: [x,y,z]} (the frame's x: a direction, a plane's normal, or the way to another hole's axis; keeps a round origin's turn). Faces are kept by name: the origin follows its face, and a circle its end, when the design changes",
     ),
     CommandSpec::new("joint.create", "Joint", joint).at("SOLID", "ASSEMBLE").icon("joint").key("J").params(
-        "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball; a, b: joint origins ({occurrence, face|circle|edge|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
+        "type: rigid|revolute|slider|cylindrical|pin_slot|planar|ball, or a relation: parallel|perpendicular|angle|point_on_plane|point_on_line|line_on_plane \
+         (ties only some directions or points, made where the parts are; several between two parts add up); a, b: joint origins ({occurrence, face|circle|edge|point: [x,y,z] in world, or face|circle: \"<face name>\"; end?, x? as joint.origin} | origin name); \
          values?: [angles in deg or expressions, distances]; limits?: [[min, max] | null…]; flip?: bool (default false: the origins are mated, \
          b's z against a's as two faces meet; true: b's z along a's, so two origins given at one point with the same z stay as they are); \
-         offset?: mm or an expression; angle?: deg or an expression; name?; quiet?: bool (leave out dof and fixed). An expression (text) is \
+         offset?: mm or an expression; angle?: deg or an expression (an angle relation's tilt from mated); name?; quiet?: bool (leave out dof and fixed). An expression (text) is \
          kept with the joint and worked out again whenever the design changes, so the joint follows the parameters it names; a joint whose \
          expression no longer works out (a parameter deleted) is left out of the solve with the reason in its errors",
     ),
@@ -614,7 +615,7 @@ fn joint_origin(s: &mut Session, p: &Value) -> Result<Value> {
 fn kind_param(p: &Value, cmd: &str) -> Result<JointKind> {
     str_(p, "type")
         .and_then(JointKind::parse)
-        .ok_or_else(|| bad(cmd, "`type` must be rigid, revolute, slider, cylindrical, pin_slot, planar or ball"))
+        .ok_or_else(|| bad(cmd, "`type` must be rigid, revolute, slider, cylindrical, pin_slot, planar, ball, parallel, perpendicular, angle, point_on_plane, point_on_line or line_on_plane"))
 }
 
 fn joint(s: &mut Session, p: &Value) -> Result<Value> {
@@ -632,7 +633,7 @@ fn joint(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => value(s, v, true, cmd)?,
         None => 0.0,
     };
-    let j = Joint {
+    let mut j = Joint {
         id,
         name,
         kind,
@@ -646,6 +647,13 @@ fn joint(s: &mut Session, p: &Value) -> Result<Value> {
         suppressed: false,
         exprs: JointExprs { offset: typed(p.get("offset")), angle: typed(p.get("angle")), values: value_exprs(p) },
     };
+    // A relation given no values starts from where its parts are: B moves no further than it must.
+    if p.get("values").is_none()
+        && p.get("value").is_none()
+        && let Some(q) = joints::relation_values(&s.doc, &s.model.state(), &j)
+    {
+        j.values = q;
+    }
     add_joint(s, j, p)
 }
 
@@ -1218,6 +1226,16 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(n) = str_(p, "name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 128) {
         j.name = n.to_string();
     }
+    // A relation whose type, offset, tilt or flip changes starts again from where its parts are.
+    let reseat = kind.is_some() || offset.is_some() || angle.is_some() || p.get("flip").is_some();
+    if reseat {
+        let edited = s.doc.assembly.joints.iter().find(|j| j.id == id).cloned();
+        if let Some(q) = edited.and_then(|j| joints::relation_values(&s.doc, &s.model.state(), &j))
+            && let Some(j) = s.doc_mut().assembly.joints.iter_mut().find(|j| j.id == id)
+        {
+            j.values = q;
+        }
+    }
     let sol = resolve(s);
     Ok(sol_json(&sol, p))
 }
@@ -1415,6 +1433,9 @@ mod frames_tests;
 #[cfg(test)]
 #[path = "joints_reach_tests.rs"]
 mod reach_tests;
+#[cfg(test)]
+#[path = "joints_relations_tests.rs"]
+mod relations_tests;
 #[cfg(test)]
 #[path = "joints_tests.rs"]
 mod tests;
