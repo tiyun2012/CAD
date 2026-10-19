@@ -119,9 +119,11 @@ pub fn anchor(app: &SolveApp, d: &Dialog) -> Option<(Vec3, Option<Vec3>)> {
         // Fillet radii and chamfer distances grow the way `blend_grow_dir` gives (into the body
         // on an outside edge, into the open corner on an inside one); shell thickness grows into
         // the body.
+        // A chamfer of two distances measures Distance 1 along its own face, not along the bisector.
         Kind::Fillet { .. } if matches!(first, Sel::Edge { .. }) => {
             let Sel::Edge { body, index, .. } = first else { return None };
-            (at, st.body(body).and_then(|b| blend_grow_dir(&b.mesh(), *index, at)))
+            let along_face = chamfer_face_dirs(app, d, at).map(|(first_face, _)| first_face);
+            (at, along_face.or_else(|| st.body(body).and_then(|b| blend_grow_dir(&b.mesh(), *index, at))))
         }
         Kind::Fillet { .. } | Kind::Shell { .. } => (at, normal.map(|n| -n)),
         Kind::Sheet(_) => (at, crate::dialogs_sheet::arrow(app, d).or(normal)),
@@ -239,6 +241,27 @@ fn edge_concave(m: &Mesh, index: usize, p: Vec3) -> Option<bool> {
 pub(crate) fn blend_grow_dir(m: &Mesh, index: usize, p: Vec3) -> Option<Vec3> {
     let n = edge_bisector(m, index, p)?;
     Some(if edge_concave(m, index, p).unwrap_or(false) { n } else { -n })
+}
+
+/// The directions Distance 1 and Distance 2 of a chamfer of two distances run from its edge at
+/// `at`: along the face that faces up most, or the other one with Flip, and along the remaining
+/// face (the kernel's `chamfer_tool_sides` picks them the same way). None for any other dialog.
+pub(crate) fn chamfer_face_dirs(app: &SolveApp, d: &Dialog, at: Vec3) -> Option<(Vec3, Vec3)> {
+    let Kind::Fillet { chamfer: true, ctype: 1, flip, .. } = &d.kind else { return None };
+    let Some(Sel::Edge { body, index, .. }) = d.inputs.first()?.items.first() else { return None };
+    let st = app.session.world_state();
+    let mesh = st.body(body)?.mesh();
+    let sides = edge_sides(&mesh, *index, at)?;
+    let [(n1, c1), (n2, c2)] = sides.as_slice() else { return None };
+    let along = n1.cross(*n2).normalized()?;
+    // From the edge into each face: the way to its centroid, square to the edge.
+    let into = |c: Vec3| {
+        let v = c - at;
+        (v - along * v.dot(along)).normalized()
+    };
+    let (t1, t2) = (into(*c1)?, into(*c2)?);
+    let up = Vec3::new(1e-6, 1e-3, 1.0);
+    Some(if (n2.dot(up) > n1.dot(up)) != *flip { (t2, t1) } else { (t1, t2) })
 }
 
 /// Whether a dynamically registered canvas handle owns this point before navigation.
@@ -416,6 +439,13 @@ fn draw(app: &SolveApp, ui: &mut egui::Ui, painter: &egui::Painter, proj: &Proj,
         && let Some(l2) = app.session.doc.eval(distance2, ValueKind::Length).ok().filter(|v| v.is_finite())
     {
         drag_arrow(ui, painter, proj, base, bs, -n, l2, true, egui::Id::new("sc_manipulator2"), half_height, distance2);
+    }
+    // A chamfer of two distances: Distance 2 gets its own arrow along the other face.
+    let faces = chamfer_face_dirs(app, d, base);
+    if let (Kind::Fillet { distance2, .. }, Some((_, t2))) = (&mut d.kind, faces)
+        && let Some(l2) = app.session.doc.eval(distance2, ValueKind::Length).ok().filter(|v| v.is_finite())
+    {
+        drag_arrow(ui, painter, proj, base, bs, t2, l2, false, egui::Id::new("sc_manipulator2"), half_height, distance2);
     }
     // A rectangular pattern's second direction gets its own arrow for Spacing 2 (#2462), as the
     // first direction's arrow sets Spacing.
