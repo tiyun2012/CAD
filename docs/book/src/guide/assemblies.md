@@ -247,6 +247,22 @@ After the part file changes, **Update Links** (`component.update_links`) reads i
 the part's bodies only: its timeline, parameters and sheet-metal data (flat pattern, bend
 table) stay in the part's own design.
 
+If a source file moves or is renamed, right-click its linked component or occurrence in the
+Browser and choose **Relink Source (All Instances)…**. Choose the saved `.solidcraft` design
+to use. Relinking updates that component's stored path and solid bodies for **all its
+instances**, keeping their identities and placements. Cancelling or choosing a missing,
+invalid, empty or self-referencing design leaves the assembly unchanged. The operation is
+one undo step and the new path is saved relative to the assembly when possible.
+
+Scripts use `component.relink {component, path}`. The reply includes `previous_path`, `path`,
+`warnings`, `joint_errors` and `joint_conflicts`. Changed geometry can invalidate a joint's
+face reference: relinking reports those joints in the reply and UI status/message history;
+repair the joint or undo the relink. Relink does not repair or verify the intended meaning of
+existing joints.
+When linked geometry changes and the component has joints, a reminder to check those joints
+is also shown even if the solver reports no error: a successful solve does not prove that a
+joint still describes the intended connection.
+
 STEP export writes the component tree as an assembly.
 
 Right-click a component in the Browser and choose **Properties** to inspect

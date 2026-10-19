@@ -69,6 +69,7 @@ pub mod install;
 pub mod issue_report;
 pub mod joint_drag;
 pub mod keymap;
+mod linked_source;
 mod material_card_review;
 #[cfg(test)]
 mod measurement_ui_tests;
@@ -783,6 +784,10 @@ impl SolveApp {
                     app.insert_path_async(&path);
                 }
             });
+            return;
+        }
+        if id == "component.relink" {
+            linked_source::start_selected(self);
             return;
         }
         if matches!(id, "file.insert_step" | "file.insert_mesh") {
